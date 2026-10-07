@@ -1,0 +1,51 @@
+# Entorno virtual e instalación local
+.venv/
+venv/
+env/
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Runtime generado en cada equipo (se recrea al arrancar)
+data/*.db
+data/*.db-*
+data/*.sqlite
+data/*.sqlite3
+data/*.csv
+data/prefs.json
+data/adjuntos/
+logs/*.log
+logs/*.log.*
+
+# Cachés y herramientas
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+.cache/
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Secretos / entorno local
+.env
+.env.*
+!.env.example
