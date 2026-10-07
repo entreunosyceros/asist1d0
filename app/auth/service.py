@@ -12,8 +12,10 @@ from typing import Optional
 
 from app.auth.password import hash_password, verify_password
 from app.database.repositories.usuario_repository import UsuarioRepository
+from app.models.audit import AuditAction, AuditEntity
 from app.models.enums import Rol
 from app.models.usuario import Usuario
+from app.services.audit_service import AuditService
 
 
 @dataclass
@@ -65,8 +67,13 @@ class SessionContext:
 class AuthService:
     """Autenticación contra el repositorio de usuarios."""
 
-    def __init__(self, usuario_repo: UsuarioRepository) -> None:
+    def __init__(
+        self,
+        usuario_repo: UsuarioRepository,
+        audit: Optional[AuditService] = None,
+    ) -> None:
         self._repo = usuario_repo
+        self._audit = audit
         self._session: Optional[SessionContext] = None
 
     @property
@@ -74,7 +81,13 @@ class AuthService:
         """Sesión actual o None si no hay usuario autenticado."""
         return self._session
 
-    def login(self, email: str, password: str) -> SessionContext:
+    def login(
+        self,
+        email: str,
+        password: str,
+        *,
+        ip_address: Optional[str] = None,
+    ) -> SessionContext:
         """Valida credenciales y abre sesión. Lanza PermissionError si fallan."""
         usuario = self._repo.obtener_por_email(email)
         if not usuario or not usuario.activo:
@@ -82,6 +95,15 @@ class AuthService:
         if not verify_password(password, usuario.password_hash):
             raise PermissionError("Credenciales incorrectas")
         self._session = SessionContext(usuario=usuario)
+        if self._audit:
+            self._audit.registrar(
+                usuario.id,
+                AuditAction.LOGIN,
+                AuditEntity.USUARIO,
+                usuario.id,
+                f"Login de {usuario.email} ({usuario.rol.value})",
+                ip_address=ip_address,
+            )
         return self._session
 
     def logout(self) -> None:

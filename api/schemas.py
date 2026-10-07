@@ -75,3 +75,15 @@ class IncidenciaOut(BaseModel):
     vencida: bool
     fecha_limite: Optional[str]
     comentarios: list[ComentarioOut] = []
+
+
+class AuditOut(BaseModel):
+    id: int
+    timestamp: Optional[str]
+    user_id: Optional[int]
+    usuario_nombre: Optional[str]
+    action: str
+    entity_type: str
+    entity_id: Optional[int]
+    details: str
+    ip_address: Optional[str]

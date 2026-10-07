@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Optional
 
 from app.database.connection import DatabaseConnection
-from app.models.enums import CategoriaIncidencia, EstadoIncidencia, Prioridad
+from app.models.enums import EstadoIncidencia, Prioridad
 from app.models.incidencia import (
     Adjunto,
     Comentario,
@@ -38,26 +38,30 @@ class IncidenciaRepository:
                    e.usuario_id AS usuario_id,
                    u.nombre AS usuario_nombre,
                    u.email AS usuario_email,
-                   t.nombre AS tecnico_nombre
+                   t.nombre AS tecnico_nombre,
+                   g.nombre AS grupo_nombre
             FROM incidencias i
             JOIN equipos e ON e.id = i.equipo_id
             JOIN usuarios u ON u.id = e.usuario_id
             LEFT JOIN usuarios t ON t.id = i.tecnico_id
+            LEFT JOIN grupos_soporte g ON g.id = i.grupo_id
         """
 
     def crear(self, incidencia: Incidencia) -> int:
         return self._db.execute(
             """
             INSERT INTO incidencias
-                (equipo_id, tecnico_id, titulo, descripcion, categoria, estado, prioridad)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                (equipo_id, tecnico_id, grupo_id, titulo, descripcion,
+                 categoria, estado, prioridad)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 incidencia.equipo_id,
                 incidencia.tecnico_id,
+                incidencia.grupo_id,
                 incidencia.titulo,
                 incidencia.descripcion,
-                incidencia.categoria.value,
+                str(getattr(incidencia.categoria, "value", incidencia.categoria)),
                 incidencia.estado.value,
                 incidencia.prioridad.value,
             ),
@@ -65,21 +69,23 @@ class IncidenciaRepository:
         )
 
     def actualizar(self, incidencia: Incidencia) -> None:
+        cat = str(getattr(incidencia.categoria, "value", incidencia.categoria))
         if incidencia.estado == EstadoIncidencia.CERRADA:
             self._db.execute(
                 """
                 UPDATE incidencias
-                SET equipo_id = ?, tecnico_id = ?, titulo = ?, descripcion = ?,
-                    categoria = ?, estado = ?, prioridad = ?,
+                SET equipo_id = ?, tecnico_id = ?, grupo_id = ?, titulo = ?,
+                    descripcion = ?, categoria = ?, estado = ?, prioridad = ?,
                     fecha_cierre = COALESCE(fecha_cierre, datetime('now', 'localtime'))
                 WHERE id = ?
                 """,
                 (
                     incidencia.equipo_id,
                     incidencia.tecnico_id,
+                    incidencia.grupo_id,
                     incidencia.titulo,
                     incidencia.descripcion,
-                    incidencia.categoria.value,
+                    cat,
                     incidencia.estado.value,
                     incidencia.prioridad.value,
                     incidencia.id,
@@ -89,16 +95,18 @@ class IncidenciaRepository:
             self._db.execute(
                 """
                 UPDATE incidencias
-                SET equipo_id = ?, tecnico_id = ?, titulo = ?, descripcion = ?,
-                    categoria = ?, estado = ?, prioridad = ?, fecha_cierre = NULL
+                SET equipo_id = ?, tecnico_id = ?, grupo_id = ?, titulo = ?,
+                    descripcion = ?, categoria = ?, estado = ?, prioridad = ?,
+                    fecha_cierre = NULL
                 WHERE id = ?
                 """,
                 (
                     incidencia.equipo_id,
                     incidencia.tecnico_id,
+                    incidencia.grupo_id,
                     incidencia.titulo,
                     incidencia.descripcion,
-                    incidencia.categoria.value,
+                    cat,
                     incidencia.estado.value,
                     incidencia.prioridad.value,
                     incidencia.id,
@@ -138,7 +146,8 @@ class IncidenciaRepository:
         equipo_id: Optional[int] = None,
         estado: Optional[EstadoIncidencia] = None,
         prioridad: Optional[Prioridad] = None,
-        categoria: Optional[CategoriaIncidencia] = None,
+        categoria: Optional[str] = None,
+        grupo_id: Optional[int] = None,
         solo_abiertas: bool = False,
         es_demo: Optional[bool] = None,
         texto: Optional[str] = None,
@@ -154,9 +163,14 @@ class IncidenciaRepository:
         elif tecnico_id is not None:
             sql += " AND i.tecnico_id = ?"
             params.append(tecnico_id)
-        if categoria is not None:
-            sql += " AND i.categoria = ?"
-            params.append(categoria.value)
+        if grupo_id is not None:
+            sql += " AND i.grupo_id = ?"
+            params.append(grupo_id)
+        if categoria:
+            cat = getattr(categoria, "value", categoria)
+            # Grupo (Hardware) o hoja (Hardware/Impresora); legacy exacto.
+            sql += " AND (i.categoria = ? OR i.categoria LIKE ? OR i.categoria = ?)"
+            params.extend([cat, f"{cat}/%", cat.split("/")[-1] if "/" in str(cat) else cat])
         if equipo_id is not None:
             sql += " AND i.equipo_id = ?"
             params.append(equipo_id)

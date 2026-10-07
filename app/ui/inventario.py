@@ -163,6 +163,7 @@ class InventarioView(QWidget):
                 precio=dlg.precio.value(),
                 descripcion=dlg.descripcion.toPlainText().strip(),
                 es_demo=self._session.es_demo,
+                actor_id=self._session.usuario_id,
             )
             self.refresh()
             show_toast(
@@ -191,7 +192,9 @@ class InventarioView(QWidget):
         c.precio = dlg.precio.value()
         c.descripcion = dlg.descripcion.toPlainText().strip()
         try:
-            self._ctx.inventario.actualizar(c)
+            self._ctx.inventario.actualizar(
+                c, actor_id=self._session.usuario_id
+            )
             self.refresh()
             show_toast(self._status, f"Repuesto «{c.nombre}» actualizado.")
         except Exception as exc:
@@ -222,7 +225,9 @@ class InventarioView(QWidget):
             return
         c.stock = c.stock + cantidad.value()
         try:
-            self._ctx.inventario.actualizar(c)
+            self._ctx.inventario.actualizar(
+                c, actor_id=self._session.usuario_id
+            )
             self.refresh()
             show_toast(
                 self._status,
@@ -243,7 +248,9 @@ class InventarioView(QWidget):
         ) != QMessageBox.StandardButton.Yes:
             return
         try:
-            self._ctx.inventario.eliminar(c.id)  # type: ignore[arg-type]
+            self._ctx.inventario.eliminar(
+                c.id, actor_id=self._session.usuario_id
+            )  # type: ignore[arg-type]
             self.refresh()
             show_toast(self._status, f"Repuesto «{c.nombre}» eliminado.")
         except Exception as exc:

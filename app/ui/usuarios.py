@@ -9,10 +9,12 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -34,10 +36,18 @@ from app.ui.page_chrome import apply_page_margins, build_page_header, show_toast
 class UsuarioDialog(QDialog):
     """Formulario modal para crear o editar una cuenta."""
 
-    def __init__(self, usuario=None, parent=None) -> None:
+    def __init__(
+        self,
+        ctx: AppContext,
+        usuario=None,
+        parent=None,
+        *,
+        grupo_ids: list[int] | None = None,
+    ) -> None:
         super().__init__(parent)
+        self._ctx = ctx
         self.setWindowTitle("Nuevo usuario" if usuario is None else "Editar usuario")
-        self.setMinimumWidth(420)
+        self.setMinimumWidth(440)
         layout = QFormLayout(self)
         self.nombre = QLineEdit()
         self.email = QLineEdit()
@@ -50,6 +60,7 @@ class UsuarioDialog(QDialog):
         self.rol = QComboBox()
         for r in Rol:
             self.rol.addItem(r.etiqueta, r.value)
+        self.rol.currentIndexChanged.connect(self._toggle_grupos)
 
         if usuario:
             self.nombre.setText(usuario.nombre)
@@ -64,6 +75,24 @@ class UsuarioDialog(QDialog):
         layout.addRow("Teléfono", self.telefono)
         layout.addRow("Contraseña", self.password)
         layout.addRow("Rol", self.rol)
+
+        self.grupos_box = QGroupBox("Grupos de soporte")
+        glay = QVBoxLayout(self.grupos_box)
+        self._grupo_checks: dict[int, QCheckBox] = {}
+        seleccion = set(grupo_ids or [])
+        for g in ctx.grupos.listar():
+            if g.id is None:
+                continue
+            chk = QCheckBox(g.nombre)
+            chk.setChecked(g.id in seleccion)
+            hint = QLabel(g.descripcion)
+            hint.setObjectName("PageSubtitle")
+            hint.setWordWrap(True)
+            glay.addWidget(chk)
+            glay.addWidget(hint)
+            self._grupo_checks[g.id] = chk
+        layout.addRow(self.grupos_box)
+        self._toggle_grupos()
 
         if usuario is None:
             nota = QLabel(
@@ -81,8 +110,18 @@ class UsuarioDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addRow(buttons)
 
+    def _toggle_grupos(self) -> None:
+        rol = self.rol_seleccionado()
+        visible = rol in (Rol.TECNICO, Rol.ADMINISTRADOR)
+        self.grupos_box.setVisible(visible)
+
     def rol_seleccionado(self) -> Rol:
         return Rol(self.rol.currentData())
+
+    def grupos_seleccionados(self) -> list[int]:
+        if self.rol_seleccionado() not in (Rol.TECNICO, Rol.ADMINISTRADOR):
+            return []
+        return [gid for gid, chk in self._grupo_checks.items() if chk.isChecked()]
 
 
 class UsuariosView(QWidget):
@@ -132,9 +171,9 @@ class UsuariosView(QWidget):
             aviso.setObjectName("PageSubtitle")
             layout.addWidget(aviso)
 
-        self.tabla = QTableWidget(0, 6)
+        self.tabla = QTableWidget(0, 7)
         self.tabla.setHorizontalHeaderLabels(
-            ["Nombre", "Email", "Teléfono", "Rol", "Tipo", "Activo"]
+            ["Nombre", "Email", "Teléfono", "Rol", "Grupos", "Tipo", "Activo"]
         )
         self.tabla.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.tabla.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -152,11 +191,14 @@ class UsuariosView(QWidget):
         for u in usuarios:
             row = self.tabla.rowCount()
             self.tabla.insertRow(row)
+            grupos = self._ctx.grupos.grupos_de_usuario(u.id) if u.id else []
+            grupos_txt = ", ".join(g.nombre for g in grupos) if grupos else "—"
             valores = [
                 u.nombre,
                 u.email,
                 u.telefono,
                 u.rol.etiqueta,
+                grupos_txt,
                 "Demo" if u.es_demo else "Real",
                 "Sí" if u.activo else "No",
             ]
@@ -165,6 +207,16 @@ class UsuariosView(QWidget):
                 item.setData(Qt.ItemDataRole.UserRole, u.id)
                 self.tabla.setItem(row, col, item)
         self.tabla.resizeColumnsToContents()
+
+    def seleccionar_usuario(self, usuario_id: int) -> None:
+        """API pública: resalta una fila (p. ej. desde búsqueda global)."""
+        self.refresh()
+        for row in range(self.tabla.rowCount()):
+            item = self.tabla.item(row, 0)
+            if item and item.data(Qt.ItemDataRole.UserRole) == usuario_id:
+                self.tabla.selectRow(row)
+                self.tabla.scrollToItem(item)
+                return
 
     def _seleccionado(self):
         items = self.tabla.selectedItems()
@@ -179,7 +231,7 @@ class UsuariosView(QWidget):
             show_toast(self._status, "Tu contraseña se ha actualizado correctamente.")
 
     def _nuevo(self) -> None:
-        dlg = UsuarioDialog(parent=self)
+        dlg = UsuarioDialog(self._ctx, parent=self)
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
         if not dlg.password.text():
@@ -193,7 +245,14 @@ class UsuariosView(QWidget):
                 rol=dlg.rol_seleccionado(),
                 telefono=dlg.telefono.text().strip(),
                 es_demo=False,
+                actor_id=self._session.usuario_id,
             )
+            if creado.id is not None:
+                self._ctx.grupos.set_grupos_usuario(
+                    creado.id,
+                    dlg.grupos_seleccionados(),
+                    actor_id=self._session.usuario_id,
+                )
             self.refresh()
             show_toast(
                 self._status,
@@ -209,7 +268,8 @@ class UsuariosView(QWidget):
         if self._session.es_demo and not u.es_demo and not self._session.es_admin():
             QMessageBox.warning(self, "Usuarios", "No puedes editar esa cuenta.")
             return
-        dlg = UsuarioDialog(usuario=u, parent=self)
+        gids = self._ctx.grupos.ids_grupos_de_usuario(u.id) if u.id else []
+        dlg = UsuarioDialog(self._ctx, usuario=u, parent=self, grupo_ids=gids)
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
         nuevo_rol = dlg.rol_seleccionado()
@@ -235,6 +295,12 @@ class UsuariosView(QWidget):
                 password=dlg.password.text() or None,
                 actor_id=self._session.usuario_id,
             )
+            if u.id is not None:
+                self._ctx.grupos.set_grupos_usuario(
+                    u.id,
+                    dlg.grupos_seleccionados(),
+                    actor_id=self._session.usuario_id,
+                )
             self.refresh()
         except Exception as exc:
             QMessageBox.critical(self, "Error", str(exc))

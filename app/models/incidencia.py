@@ -11,7 +11,11 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from datetime import datetime, timedelta
-from app.models.enums import CategoriaIncidencia, EstadoIncidencia, Prioridad
+from app.models.catalogo_categorias import (
+    etiqueta_categoria,
+    resolver_categoria,
+)
+from app.models.enums import EstadoIncidencia, Prioridad
 
 
 @dataclass
@@ -192,10 +196,11 @@ class Incidencia:
     _titulo: str
     _equipo_id: int
     _descripcion: str = ""
-    _categoria: CategoriaIncidencia = CategoriaIncidencia.OTRO
+    _categoria: str = "Otro"
     _estado: EstadoIncidencia = EstadoIncidencia.ABIERTA
     _prioridad: Prioridad = Prioridad.MEDIA
     _tecnico_id: Optional[int] = None
+    _grupo_id: Optional[int] = None
     _id: Optional[int] = None
     _fecha_creacion: Optional[str] = None
     _fecha_cierre: Optional[str] = None
@@ -208,6 +213,7 @@ class Incidencia:
     _usuario_nombre: Optional[str] = field(default=None, repr=False)
     _usuario_email: Optional[str] = field(default=None, repr=False)
     _tecnico_nombre: Optional[str] = field(default=None, repr=False)
+    _grupo_nombre: Optional[str] = field(default=None, repr=False)
     _usuario_id: Optional[int] = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
@@ -217,11 +223,9 @@ class Incidencia:
             self._estado = EstadoIncidencia(self._estado)
         if isinstance(self._prioridad, str):
             self._prioridad = Prioridad(self._prioridad)
-        if isinstance(self._categoria, str):
-            try:
-                self._categoria = CategoriaIncidencia(self._categoria)
-            except ValueError:
-                self._categoria = CategoriaIncidencia.OTRO
+        if not isinstance(self._categoria, str):
+            self._categoria = str(getattr(self._categoria, "value", self._categoria))
+        self._categoria = self._categoria or "Otro"
 
     @property
     def id(self) -> Optional[int]:
@@ -254,14 +258,17 @@ class Incidencia:
         self._descripcion = value or ""
 
     @property
-    def categoria(self) -> CategoriaIncidencia:
+    def categoria(self) -> str:
+        """Código de categoría (``Hardware/Impresora``, ``Otro``, …)."""
         return self._categoria
 
     @categoria.setter
-    def categoria(self, value: CategoriaIncidencia | str) -> None:
-        self._categoria = (
-            CategoriaIncidencia(value) if isinstance(value, str) else value
-        )
+    def categoria(self, value: str) -> None:
+        self._categoria = str(getattr(value, "value", value) or "Otro")
+
+    @property
+    def categoria_etiqueta(self) -> str:
+        return etiqueta_categoria(self._categoria)
 
     @property
     def estado(self) -> EstadoIncidencia:
@@ -290,6 +297,18 @@ class Incidencia:
     @tecnico_id.setter
     def tecnico_id(self, value: Optional[int]) -> None:
         self._tecnico_id = value
+
+    @property
+    def grupo_id(self) -> Optional[int]:
+        return self._grupo_id
+
+    @grupo_id.setter
+    def grupo_id(self, value: Optional[int]) -> None:
+        self._grupo_id = value
+
+    @property
+    def grupo_nombre(self) -> Optional[str]:
+        return self._grupo_nombre
 
     @property
     def fecha_creacion(self) -> Optional[str]:
@@ -354,10 +373,13 @@ class Incidencia:
 
     @property
     def fecha_limite(self) -> Optional[datetime]:
-        """Fecha/hora límite según prioridad (SLA)."""
+        """Fecha/hora límite: SLA de la categoría, o fallback por prioridad."""
         inicio = self._parse_fecha_creacion()
         if inicio is None:
             return None
+        hoja = resolver_categoria(self._categoria)
+        if hoja is not None:
+            return hoja.perfil.sla.plazo_desde(inicio)
         dias = self._prioridad.dias_sla
         if dias <= 0:
             return inicio + timedelta(hours=24)
@@ -434,9 +456,10 @@ def incidencia_desde_fila(row) -> Incidencia:
         _id=data["id"],
         _equipo_id=data["equipo_id"],
         _tecnico_id=data.get("tecnico_id"),
+        _grupo_id=data.get("grupo_id"),
         _titulo=data["titulo"],
         _descripcion=data.get("descripcion") or "",
-        _categoria=data.get("categoria") or CategoriaIncidencia.OTRO.value,
+        _categoria=data.get("categoria") or "Otro",
         _estado=data["estado"],
         _prioridad=data["prioridad"],
         _fecha_creacion=data.get("fecha_creacion"),
@@ -445,5 +468,6 @@ def incidencia_desde_fila(row) -> Incidencia:
         _usuario_nombre=data.get("usuario_nombre"),
         _usuario_email=data.get("usuario_email"),
         _tecnico_nombre=data.get("tecnico_nombre"),
+        _grupo_nombre=data.get("grupo_nombre"),
         _usuario_id=data.get("usuario_id"),
     )

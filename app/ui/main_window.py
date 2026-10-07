@@ -14,6 +14,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QAction, QCloseEvent, QKeySequence
 from PySide6.QtWidgets import (
     QButtonGroup,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -29,9 +30,12 @@ from app.bootstrap import AppContext
 from app.config import APP_NAME, APP_VERSION
 from app.models.enums import Rol
 from app.ui.about_dialog import AboutDialog
+from app.ui.auditoria import AuditoriaView
 from app.ui.change_password_dialog import ChangePasswordDialog
+from app.ui.conocimiento import ConocimientoView
 from app.ui.dashboard import DashboardView
 from app.ui.equipos import EquiposView
+from app.ui.global_search import GlobalSearchBar
 from app.ui.help_dialog import HelpDialog
 from app.ui.incidencias import IncidenciasView
 from app.ui.informes import InformesView
@@ -39,6 +43,7 @@ from app.ui.inventario import InventarioView
 from app.ui.panel_tecnico import PanelTecnicoView
 from app.ui.resources import apply_window_icon, logo_label
 from app.ui.usuarios import UsuariosView
+from app.services.search_service import SearchHit
 
 
 class MainWindow(QMainWindow):
@@ -153,6 +158,14 @@ class MainWindow(QMainWindow):
         menu_sesion.addAction(act_logout)
 
         menu_ir = menubar.addMenu("&Ir")
+        act_search = QAction("Buscar…", self)
+        act_search.setShortcut(QKeySequence("Ctrl+K"))
+        act_search.triggered.connect(self.focus_global_search)
+        menu_ir.addAction(act_search)
+        act_portal = QAction("Abrir portal web…", self)
+        act_portal.triggered.connect(self.open_portal)
+        menu_ir.addAction(act_portal)
+        menu_ir.addSeparator()
         for i, name in enumerate(self._page_names):
             action = QAction(name, self)
             action.triggered.connect(
@@ -165,9 +178,6 @@ class MainWindow(QMainWindow):
         act_help.setShortcut(QKeySequence.StandardKey.HelpContents)
         act_help.triggered.connect(self._show_help)
         menu_ayuda.addAction(act_help)
-        act_portal = QAction("Abrir portal web…", self)
-        act_portal.triggered.connect(self.open_portal)
-        menu_ayuda.addAction(act_portal)
         act_about = QAction(f"Acerca de {APP_NAME}…", self)
         act_about.triggered.connect(self._show_about)
         menu_ayuda.addAction(act_about)
@@ -231,6 +241,7 @@ class MainWindow(QMainWindow):
                 ("Dashboard", self._make_dashboard),
                 ("Incidencias", lambda: IncidenciasView(self._ctx, self._session)),
                 ("Equipos", self._make_equipos),
+                ("Base de conocimiento", lambda: ConocimientoView(self._ctx, self._session)),
             ]
         else:
             defs = [
@@ -239,7 +250,9 @@ class MainWindow(QMainWindow):
                 ("Equipos", self._make_equipos),
                 ("Usuarios", lambda: UsuariosView(self._ctx, self._session)),
                 ("Inventario", lambda: InventarioView(self._ctx, self._session)),
+                ("Base de conocimiento", lambda: ConocimientoView(self._ctx, self._session)),
                 ("Informes", lambda: InformesView(self._ctx, self._session)),
+                ("Auditoría", lambda: AuditoriaView(self._ctx, self._session)),
                 ("Panel técnico", lambda: PanelTecnicoView(self._ctx, self._session)),
             ]
 
@@ -265,8 +278,24 @@ class MainWindow(QMainWindow):
         btn_logout.clicked.connect(self._logout)
         slay.addWidget(btn_logout)
 
+        content = QWidget()
+        content.setObjectName("ContentShell")
+        clay = QVBoxLayout(content)
+        clay.setContentsMargins(0, 0, 0, 0)
+        clay.setSpacing(0)
+
+        search_wrap = QFrame()
+        search_wrap.setObjectName("GlobalSearchChrome")
+        sw_lay = QHBoxLayout(search_wrap)
+        sw_lay.setContentsMargins(20, 12, 20, 8)
+        self._global_search = GlobalSearchBar(self._ctx, self._session)
+        self._global_search.activated.connect(self._on_search_hit)
+        sw_lay.addWidget(self._global_search, 1)
+        clay.addWidget(search_wrap)
+        clay.addWidget(self._stack, 1)
+
         root.addWidget(sidebar)
-        root.addWidget(self._stack, 1)
+        root.addWidget(content, 1)
 
         self._ensure_page(0)
         self._stack.setCurrentIndex(0)
@@ -316,6 +345,54 @@ class MainWindow(QMainWindow):
         if idx is None:
             return
         self._goto(idx)
+        if 0 <= idx < len(self._nav_buttons):
+            self._nav_buttons[idx].setChecked(True)
+
+    def focus_global_search(self) -> None:
+        self.bring_to_front()
+        self._global_search.focus_search()
+
+    def _on_search_hit(self, hit: SearchHit) -> None:
+        kind = hit.kind
+        if kind in ("incidencia", "comentario"):
+            self.abrir_incidencia(hit.entity_id)
+        elif kind == "equipo":
+            self.abrir_equipo(hit.entity_id)
+        elif kind == "usuario":
+            self.abrir_usuario(hit.entity_id)
+        elif kind == "articulo":
+            self.abrir_articulo(hit.entity_id)
+
+    def abrir_equipo(self, equipo_id: int) -> None:
+        idx = self._page_index("Equipos")
+        if idx is None:
+            return
+        self._goto(idx)
+        widget = self._stack.widget(idx)
+        if isinstance(widget, EquiposView):
+            widget.seleccionar_equipo(equipo_id)
+        if 0 <= idx < len(self._nav_buttons):
+            self._nav_buttons[idx].setChecked(True)
+
+    def abrir_usuario(self, usuario_id: int) -> None:
+        idx = self._page_index("Usuarios")
+        if idx is None:
+            return
+        self._goto(idx)
+        widget = self._stack.widget(idx)
+        if isinstance(widget, UsuariosView):
+            widget.seleccionar_usuario(usuario_id)
+        if 0 <= idx < len(self._nav_buttons):
+            self._nav_buttons[idx].setChecked(True)
+
+    def abrir_articulo(self, article_id: int) -> None:
+        idx = self._page_index("Base de conocimiento")
+        if idx is None:
+            return
+        self._goto(idx)
+        widget = self._stack.widget(idx)
+        if isinstance(widget, ConocimientoView):
+            widget.seleccionar_articulo(article_id)
         if 0 <= idx < len(self._nav_buttons):
             self._nav_buttons[idx].setChecked(True)
 

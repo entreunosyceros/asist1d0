@@ -81,7 +81,12 @@ class Prioridad(str, Enum):
 
 
 class CategoriaIncidencia(str, Enum):
-    """Categoría / plantilla al crear una incidencia."""
+    """
+    Alias legacy de categorías planas.
+
+    El catálogo jerárquico vive en ``app.models.catalogo_categorias``.
+    Estos valores se normalizan a códigos ``Familia/Hoja`` al resolver.
+    """
 
     RED = "Red"
     HARDWARE = "Hardware"
@@ -92,30 +97,11 @@ class CategoriaIncidencia(str, Enum):
 
     @property
     def plantilla(self) -> tuple[str, str]:
-        """Título y descripción sugeridos (editables por el usuario)."""
-        return {
-            CategoriaIncidencia.RED: (
-                "Problema de red / conectividad",
-                "Describe si afecta a Wi-Fi, cable o VPN, y desde cuándo ocurre.",
-            ),
-            CategoriaIncidencia.HARDWARE: (
-                "Fallo de hardware",
-                "Indica el componente (pantalla, teclado, disco…) y si hay mensajes de error.",
-            ),
-            CategoriaIncidencia.SOFTWARE: (
-                "Problema de software / aplicación",
-                "Nombre de la aplicación, versión si la conoces y pasos para reproducir el error.",
-            ),
-            CategoriaIncidencia.IMPRESORA: (
-                "Problema con impresora",
-                "Modelo de impresora, si es local o de red, y qué ocurre al imprimir.",
-            ),
-            CategoriaIncidencia.CUENTA: (
-                "Acceso / cuenta de usuario",
-                "Indica el sistema (correo, VPN, dominio…) y el tipo de acceso que necesitas.",
-            ),
-            CategoriaIncidencia.OTRO: (
-                "Otra incidencia",
-                "Describe el problema con el máximo detalle posible.",
-            ),
-        }[self]
+        """Compatibilidad: delega en el catálogo elaborado."""
+        from app.models.catalogo_categorias import resolver_categoria
+
+        hoja = resolver_categoria(self.value)
+        if hoja is None:
+            return ("Otra incidencia", "Describe el problema.")
+        p = hoja.perfil.plantilla
+        return (p.titulo, p.descripcion)

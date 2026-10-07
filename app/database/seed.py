@@ -12,11 +12,12 @@ from app.database.connection import DatabaseConnection
 from app.database.repositories import (
     ComponenteRepository,
     EquipoRepository,
+    GrupoRepository,
     IncidenciaRepository,
     UsuarioRepository,
 )
 from app.models.componente import Componente
-from app.models.enums import CategoriaIncidencia, EstadoIncidencia, Prioridad, Rol
+from app.models.enums import EstadoIncidencia, Prioridad, Rol
 from app.models.equipo import Equipo
 from app.models.incidencia import Incidencia, Intervencion
 from app.models.usuario import Usuario
@@ -79,7 +80,13 @@ def seed_database(db: DatabaseConnection) -> None:
     )
     maria.id = usuarios.crear(maria)
 
-    assert juan.id and tecnico.id and maria.id
+    assert juan.id and tecnico.id and maria.id and admin.id
+
+    grupos = GrupoRepository(db)
+    grupo_ids = [g.id for g in grupos.listar() if g.id is not None]
+    # Admin y técnico demo en todos los grupos.
+    for uid in (admin.id, tecnico.id):
+        grupos.set_grupos_usuario(uid, grupo_ids)
 
     eq1 = Equipo(
         _usuario_id=juan.id,
@@ -87,6 +94,10 @@ def seed_database(db: DatabaseConnection) -> None:
         _marca="HP",
         _modelo="ProBook 450",
         _sistema_operativo="Ubuntu 24.04",
+        _cpu="Intel i5-12400",
+        _ram_gb=16,
+        _almacenamiento="SSD 512 GB",
+        _gpu="Intel UHD Graphics",
     )
     eq1.id = equipos.crear(eq1)
 
@@ -96,6 +107,10 @@ def seed_database(db: DatabaseConnection) -> None:
         _marca="Dell",
         _modelo="Latitude 5420",
         _sistema_operativo="Windows 11",
+        _cpu="Intel i7-1185G7",
+        _ram_gb=32,
+        _almacenamiento="SSD 1 TB",
+        _gpu="Intel Iris Xe",
     )
     eq2.id = equipos.crear(eq2)
 
@@ -105,6 +120,10 @@ def seed_database(db: DatabaseConnection) -> None:
         _marca="Lenovo",
         _modelo="ThinkPad E14",
         _sistema_operativo="Ubuntu 22.04",
+        _cpu="AMD Ryzen 5 5500U",
+        _ram_gb=16,
+        _almacenamiento="SSD 256 GB",
+        _gpu="Radeon Graphics",
     )
     eq3.id = equipos.crear(eq3)
 
@@ -116,7 +135,7 @@ def seed_database(db: DatabaseConnection) -> None:
         _tecnico_id=tecnico.id,
         _titulo="No funciona el Wi-Fi",
         _descripcion="El equipo no detecta ninguna red Wi-Fi.",
-        _categoria=CategoriaIncidencia.RED,
+        _categoria="Red/WiFi",
         _estado=EstadoIncidencia.EN_REPARACION,
         _prioridad=Prioridad.ALTA,
     )
@@ -145,7 +164,7 @@ def seed_database(db: DatabaseConnection) -> None:
             _tecnico_id=tecnico.id,
             _titulo="Disco lleno",
             _descripcion="El disco raíz está al 98% de uso.",
-            _categoria=CategoriaIncidencia.HARDWARE,
+            _categoria="Hardware/PC",
             _estado=EstadoIncidencia.PENDIENTE,
             _prioridad=Prioridad.MEDIA,
         )
@@ -158,7 +177,7 @@ def seed_database(db: DatabaseConnection) -> None:
             _equipo_id=eq1.id,
             _titulo="Problemas de sonido",
             _descripcion="No hay salida de audio por altavoces ni auriculares.",
-            _categoria=CategoriaIncidencia.HARDWARE,
+            _categoria="Hardware/Perifericos",
             _estado=EstadoIncidencia.ABIERTA,
             _prioridad=Prioridad.BAJA,
         )
@@ -172,7 +191,7 @@ def seed_database(db: DatabaseConnection) -> None:
             _tecnico_id=tecnico.id,
             _titulo="Impresora configurada",
             _descripcion="Se configuró la impresora de red correctamente.",
-            _categoria=CategoriaIncidencia.IMPRESORA,
+            _categoria="Hardware/Impresora",
             _estado=EstadoIncidencia.CERRADA,
             _prioridad=Prioridad.BAJA,
         )
@@ -199,3 +218,9 @@ def seed_database(db: DatabaseConnection) -> None:
                 _es_demo=True,
             )
         )
+
+    from app.database.seed_equipo_detalle import ensure_equipo_detalle
+    from app.database.seed_dashboard import ensure_dashboard_seed
+
+    ensure_equipo_detalle(db)
+    ensure_dashboard_seed(db)

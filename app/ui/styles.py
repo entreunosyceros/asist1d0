@@ -163,6 +163,41 @@ QListWidget#DetailList {
     border-radius: 10px;
     background: #f8fafc;
 }
+QFrame#TimelinePanel {
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    background: #f8fafc;
+}
+QLabel#TimelineDay {
+    color: #6b7280;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 8px 0 4px 30px;
+    letter-spacing: 0.02em;
+}
+QLabel#TimelineTime {
+    color: #6b7280;
+    font-size: 12px;
+    font-weight: 600;
+    font-family: "JetBrains Mono", "Cascadia Mono", "Consolas", monospace;
+    padding-top: 4px;
+}
+QLabel#TimelineTitle {
+    color: #111827;
+    font-size: 13px;
+    font-weight: 600;
+}
+QLabel#TimelineBody {
+    color: #4b5563;
+    font-size: 13px;
+    font-style: italic;
+    padding-left: 2px;
+}
+QLabel#TimelineEmpty {
+    color: #9ca3af;
+    font-size: 13px;
+    padding: 24px;
+}
 QFrame#SidebarLogoWrap {
     background: transparent;
     padding: 8px 16px 0 16px;
@@ -185,6 +220,98 @@ QFrame#KpiCard {
 }
 QFrame#KpiCard:hover {
     border: 1px solid #c7d2fe;
+}
+QFrame#MetricsPanel {
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 16px;
+}
+QLabel#MetricsPanelTitle {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 1.2px;
+    color: #6b7280;
+}
+QFrame#MetricsDivider {
+    background: #e5e7eb;
+    max-height: 1px;
+    margin: 4px 0 6px 0;
+}
+QLabel#MetricLabel {
+    color: #4b5563;
+    font-size: 13px;
+}
+QLabel#MetricValue {
+    color: #111827;
+    font-size: 16px;
+    font-weight: 700;
+}
+QLabel#MetricValue[warn="true"] {
+    color: #b91c1c;
+}
+QFrame#ChartCard {
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 16px;
+    min-height: 220px;
+}
+QLabel#ChartTitle {
+    font-size: 13px;
+    font-weight: 600;
+    color: #374151;
+}
+
+/* ── Búsqueda global ─────────────────────────────── */
+QFrame#GlobalSearchChrome {
+    background: #f4f6fb;
+    border-bottom: 1px solid #e5e7eb;
+}
+QLineEdit#GlobalSearchInput {
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 12px;
+    padding: 10px 14px;
+    font-size: 14px;
+    min-height: 20px;
+}
+QLineEdit#GlobalSearchInput:focus {
+    border: 1px solid #2563eb;
+    background: #ffffff;
+}
+QFrame#SearchResultsPanel {
+    background: #ffffff;
+    border: 1px solid #d1d5db;
+    border-radius: 12px;
+}
+QLabel#SearchSectionTitle {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+    color: #6b7280;
+    padding: 8px 10px 2px 10px;
+}
+QLabel#SearchHint {
+    color: #9ca3af;
+    padding: 16px 12px;
+}
+QFrame#SearchHitRow {
+    background: transparent;
+    border-radius: 8px;
+}
+QFrame#SearchHitRow[selected="true"] {
+    background: #eff6ff;
+}
+QFrame#SearchHitRow:hover {
+    background: #f3f4f6;
+}
+QLabel#SearchHitTitle {
+    font-size: 13px;
+    font-weight: 600;
+    color: #111827;
+}
+QLabel#SearchHitSub {
+    font-size: 11px;
+    color: #6b7280;
 }
 
 /* ── Login ──────────────────────────────────────── */

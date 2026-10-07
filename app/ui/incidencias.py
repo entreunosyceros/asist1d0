@@ -2,8 +2,8 @@
 Vista de incidencias (listado + ficha de detalle).
 
 Incluye búsqueda/filtros, cambio de estado/prioridad, asignación,
-intervenciones, uso de repuestos e historial. El rol Usuario solo
-crea/consulta las suyas.
+intervenciones, uso de repuestos y timeline unificada. El rol Usuario
+solo crea/consulta las suyas.
 """
 
 from __future__ import annotations
@@ -40,13 +40,21 @@ from PySide6.QtWidgets import (
 
 from app.auth.service import SessionContext
 from app.bootstrap import AppContext
-from app.models.enums import CategoriaIncidencia, EstadoIncidencia, Prioridad, Rol
+from app.models.catalogo_categorias import (
+    listar_hojas,
+    listar_para_filtro,
+    resolver_categoria,
+)
+from app.models.enums import EstadoIncidencia, Prioridad, Rol
+from app.models.timeline import construir_timeline
 from app.ui.page_chrome import (
     EmptyState,
     apply_page_margins,
     build_page_header,
     show_toast,
 )
+from app.ui.conocimiento import ArticuloLecturaDialog
+from app.ui.timeline_widget import TimelineWidget
 
 
 class NuevaIncidenciaDialog(QDialog):
@@ -56,10 +64,12 @@ class NuevaIncidenciaDialog(QDialog):
         super().__init__(parent)
         self._ctx = ctx
         self._session = session
+        self._campo_widgets: dict[str, QLineEdit] = {}
         self.setWindowTitle("Nueva incidencia")
-        self.setMinimumWidth(440)
+        self.setMinimumWidth(520)
         layout = QFormLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
+        self._form = layout
 
         self.equipo = QComboBox()
         if session.rol == Rol.USUARIO:
@@ -72,9 +82,13 @@ class NuevaIncidenciaDialog(QDialog):
             self.equipo.addItem(f"{eq.nombre_completo} ({eq.numero_serie})", eq.id)
 
         self.categoria = QComboBox()
-        for c in CategoriaIncidencia:
-            self.categoria.addItem(c.value, c.value)
+        for hoja in listar_hojas():
+            self.categoria.addItem(hoja.etiqueta_ruta(), hoja.codigo)
         self.categoria.currentIndexChanged.connect(self._aplicar_plantilla)
+
+        self.meta_cat = QLabel("")
+        self.meta_cat.setObjectName("PageSubtitle")
+        self.meta_cat.setWordWrap(True)
 
         self.titulo = QLineEdit()
         self.descripcion = QTextEdit()
@@ -83,10 +97,29 @@ class NuevaIncidenciaDialog(QDialog):
         for p in Prioridad:
             self.prioridad.addItem(f"{p.icono} {p.value}", p.value)
 
+        self.campos_box = QGroupBox("Datos específicos de la categoría")
+        self.campos_lay = QFormLayout(self.campos_box)
+
+        self.sugerencias_box = QGroupBox("Posibles soluciones")
+        sug_lay = QVBoxLayout(self.sugerencias_box)
+        hint = QLabel("Revisa estos artículos antes de abrir el ticket (doble clic).")
+        hint.setObjectName("PageSubtitle")
+        hint.setWordWrap(True)
+        sug_lay.addWidget(hint)
+        self.lista_sugerencias = QListWidget()
+        self.lista_sugerencias.setObjectName("DetailList")
+        self.lista_sugerencias.setMinimumHeight(100)
+        self.lista_sugerencias.setMaximumHeight(140)
+        self.lista_sugerencias.itemDoubleClicked.connect(self._abrir_sugerencia)
+        sug_lay.addWidget(self.lista_sugerencias)
+
         layout.addRow("Equipo", self.equipo)
         layout.addRow("Categoría", self.categoria)
+        layout.addRow("", self.meta_cat)
         layout.addRow("Título", self.titulo)
         layout.addRow("Descripción", self.descripcion)
+        layout.addRow(self.campos_box)
+        layout.addRow(self.sugerencias_box)
         layout.addRow("Prioridad", self.prioridad)
 
         buttons = QDialogButtonBox(
@@ -95,29 +128,103 @@ class NuevaIncidenciaDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addRow(buttons)
+        self._titulos_plantilla = {h.perfil.plantilla.titulo for h in listar_hojas()}
+        self._descs_plantilla = {h.perfil.plantilla.descripcion for h in listar_hojas()}
         self._aplicar_plantilla()
 
+    def _hoja_actual(self):
+        return resolver_categoria(self.categoria.currentData())
+
     def _aplicar_plantilla(self) -> None:
-        cat = CategoriaIncidencia(self.categoria.currentData())
-        titulo, desc = cat.plantilla
-        # Solo rellena si el usuario no ha escrito aún o coincide con otra plantilla.
-        actuales = {t for t, _ in (c.plantilla for c in CategoriaIncidencia)}
-        if not self.titulo.text().strip() or self.titulo.text().strip() in actuales:
-            self.titulo.setText(titulo)
-        descs = {d for _, d in (c.plantilla for c in CategoriaIncidencia)}
+        hoja = self._hoja_actual()
+        if hoja is None:
+            return
+        p = hoja.perfil
+        self.meta_cat.setText(
+            f"SLA: {p.sla.etiqueta} · Prioridad sugerida: {p.prioridad.value} · "
+            f"Grupo: {p.grupo.nombre}"
+        )
+        if (
+            not self.titulo.text().strip()
+            or self.titulo.text().strip() in self._titulos_plantilla
+        ):
+            self.titulo.setText(p.plantilla.titulo)
         if (
             not self.descripcion.toPlainText().strip()
-            or self.descripcion.toPlainText().strip() in descs
+            or self.descripcion.toPlainText().strip() in self._descs_plantilla
         ):
-            self.descripcion.setPlainText(desc)
+            self.descripcion.setPlainText(p.plantilla.descripcion)
+        idx = self.prioridad.findData(p.prioridad.value)
+        if idx >= 0:
+            self.prioridad.setCurrentIndex(idx)
+
+        while self.campos_lay.rowCount():
+            self.campos_lay.removeRow(0)
+        self._campo_widgets.clear()
+        if not p.campos:
+            self.campos_box.hide()
+        else:
+            self.campos_box.show()
+            for campo in p.campos:
+                edit = QLineEdit()
+                edit.setPlaceholderText(campo.hint or "")
+                etiqueta = campo.etiqueta + (" *" if campo.obligatorio else "")
+                self.campos_lay.addRow(etiqueta, edit)
+                self._campo_widgets[campo.clave] = edit
+
+        self._actualizar_sugerencias(hoja.codigo)
+
+    def _actualizar_sugerencias(self, categoria_codigo: str) -> None:
+        self.lista_sugerencias.clear()
+        arts = self._ctx.conocimiento.sugerir_para_categoria(
+            categoria_codigo, limite=6
+        )
+        if not arts:
+            self.sugerencias_box.hide()
+            return
+        self.sugerencias_box.show()
+        for a in arts:
+            item = QListWidgetItem(f"🔧  {a.resumen or a.titulo}")
+            item.setData(Qt.ItemDataRole.UserRole, a.id)
+            item.setToolTip(a.titulo)
+            self.lista_sugerencias.addItem(item)
+
+    def _abrir_sugerencia(self, item: QListWidgetItem) -> None:
+        aid = item.data(Qt.ItemDataRole.UserRole)
+        art = self._ctx.conocimiento.obtener(aid)
+        if art:
+            ArticuloLecturaDialog(art, parent=self).exec()
+
+    def accept(self) -> None:
+        hoja = self._hoja_actual()
+        if hoja:
+            for campo in hoja.perfil.campos:
+                if not campo.obligatorio:
+                    continue
+                w = self._campo_widgets.get(campo.clave)
+                if w is not None and not w.text().strip():
+                    QMessageBox.warning(
+                        self,
+                        "Categoría",
+                        f"Completa el campo obligatorio: {campo.etiqueta}",
+                    )
+                    return
+        super().accept()
 
     def datos(self):
+        hoja = self._hoja_actual()
+        valores = {
+            k: w.text().strip() for k, w in self._campo_widgets.items() if w.text().strip()
+        }
+        desc = self.descripcion.toPlainText().strip()
+        if hoja is not None:
+            desc = hoja.enriquecer_descripcion(desc, valores)
         return {
             "equipo_id": self.equipo.currentData(),
             "titulo": self.titulo.text().strip(),
-            "descripcion": self.descripcion.toPlainText().strip(),
+            "descripcion": desc,
             "prioridad": Prioridad(self.prioridad.currentData()),
-            "categoria": CategoriaIncidencia(self.categoria.currentData()),
+            "categoria": self.categoria.currentData() or "Otro",
         }
 
 
@@ -197,6 +304,7 @@ class UsarRepuestoDialog(QDialog):
                 precio=dlg.precio.value(),
                 descripcion=dlg.descripcion.toPlainText().strip(),
                 es_demo=self._session.es_demo,
+                actor_id=self._session.usuario_id,
             )
             self._rellenar_componentes(creado.id)
             if self.componente.count() == 0:
@@ -270,8 +378,8 @@ class IncidenciasView(QWidget):
 
         self.filtro_categoria = QComboBox()
         self.filtro_categoria.addItem("Categoría: todas", "")
-        for c in CategoriaIncidencia:
-            self.filtro_categoria.addItem(c.value, c.value)
+        for etiqueta, codigo in listar_para_filtro():
+            self.filtro_categoria.addItem(etiqueta, codigo)
         self.filtro_categoria.currentIndexChanged.connect(self.refresh)
 
         self.chk_mias = QCheckBox("Mis asignadas")
@@ -371,6 +479,13 @@ class IncidenciasView(QWidget):
         if self._session.rol != Rol.USUARIO:
             self.user_actions.hide()
 
+        dlay.addWidget(QLabel("Artículos relacionados"))
+        self.lista_kb = QListWidget()
+        self.lista_kb.setObjectName("DetailList")
+        self.lista_kb.setMinimumHeight(70)
+        self.lista_kb.itemDoubleClicked.connect(self._abrir_kb_relacionado)
+        dlay.addWidget(self.lista_kb)
+
         dlay.addWidget(QLabel("Adjuntos"))
         self.lista_adjuntos = QListWidget()
         self.lista_adjuntos.setObjectName("DetailList")
@@ -392,11 +507,10 @@ class IncidenciasView(QWidget):
         adj_row.addWidget(self.btn_eliminar_adjunto)
         dlay.addLayout(adj_row)
 
-        dlay.addWidget(QLabel("Comentarios"))
-        self.lista_comentarios = QListWidget()
-        self.lista_comentarios.setObjectName("DetailList")
-        self.lista_comentarios.setMinimumHeight(100)
-        dlay.addWidget(self.lista_comentarios)
+        dlay.addWidget(QLabel("Actividad"))
+        self.timeline = TimelineWidget()
+        dlay.addWidget(self.timeline)
+
         self.comentario_input = QTextEdit()
         self.comentario_input.setMaximumHeight(72)
         self.comentario_input.setPlaceholderText(
@@ -407,18 +521,6 @@ class IncidenciasView(QWidget):
         self.btn_comentario.setObjectName("SecondaryButton")
         self.btn_comentario.clicked.connect(self._enviar_comentario)
         dlay.addWidget(self.btn_comentario)
-
-        dlay.addWidget(QLabel("Intervenciones"))
-        self.lista_intervenciones = QListWidget()
-        self.lista_intervenciones.setObjectName("DetailList")
-        self.lista_intervenciones.setMinimumHeight(90)
-        dlay.addWidget(self.lista_intervenciones)
-
-        dlay.addWidget(QLabel("Historial"))
-        self.lista_historial = QListWidget()
-        self.lista_historial.setObjectName("DetailList")
-        self.lista_historial.setMinimumHeight(90)
-        dlay.addWidget(self.lista_historial)
 
         dlay.addWidget(QLabel("Repuestos usados"))
         self.lista_repuestos = QListWidget()
@@ -438,17 +540,23 @@ class IncidenciasView(QWidget):
         self.cmb_prioridad = QComboBox()
         for p in Prioridad:
             self.cmb_prioridad.addItem(f"{p.icono} {p.value}", p.value)
+        self.cmb_grupo = QComboBox()
+        self.cmb_grupo.addItem("Sin grupo", -1)
+        for g in self._ctx.grupos.listar():
+            self.cmb_grupo.addItem(g.nombre, g.id)
+        self.cmb_grupo.currentIndexChanged.connect(self._on_grupo_cambiado)
+
         self.cmb_tecnico = QComboBox()
-        self.cmb_tecnico.addItem("Sin asignar", -1)
-        for t in self._ctx.usuarios.tecnicos(es_demo=self._session.es_demo):
-            self.cmb_tecnico.addItem(t.nombre, t.id)
+        self._rellenar_tecnicos()
 
         actions.addWidget(QLabel("Estado"), 0, 0)
         actions.addWidget(self.cmb_estado, 0, 1)
         actions.addWidget(QLabel("Prioridad"), 1, 0)
         actions.addWidget(self.cmb_prioridad, 1, 1)
-        actions.addWidget(QLabel("Técnico"), 2, 0)
-        actions.addWidget(self.cmb_tecnico, 2, 1)
+        actions.addWidget(QLabel("Grupo"), 2, 0)
+        actions.addWidget(self.cmb_grupo, 2, 1)
+        actions.addWidget(QLabel("Técnico"), 3, 0)
+        actions.addWidget(self.cmb_tecnico, 3, 1)
         tech_lay.addLayout(actions)
 
         row_btns = QHBoxLayout()
@@ -492,6 +600,7 @@ class IncidenciasView(QWidget):
         self.btn_repuesto.setEnabled(tech)
         self.cmb_estado.setEnabled(tech)
         self.cmb_prioridad.setEnabled(tech)
+        self.cmb_grupo.setEnabled(tech)
         self.cmb_tecnico.setEnabled(tech)
         self.btn_comentario.setEnabled(enabled)
         self.comentario_input.setEnabled(enabled)
@@ -503,6 +612,40 @@ class IncidenciasView(QWidget):
         self.btn_confirmar.setVisible(puede_confirmar)
         self.btn_reabrir.setEnabled(puede_reabrir)
         self.btn_reabrir.setVisible(puede_reabrir)
+
+    def _rellenar_tecnicos(self, prefer_id: int | None = None) -> None:
+        """Técnicos del grupo seleccionado (o todos si no hay grupo)."""
+        actual = prefer_id
+        if actual is None:
+            cur = self.cmb_tecnico.currentData()
+            actual = cur if cur not in (None, -1) else None
+        self.cmb_tecnico.blockSignals(True)
+        self.cmb_tecnico.clear()
+        self.cmb_tecnico.addItem("Sin asignar", -1)
+        gid = self.cmb_grupo.currentData()
+        if gid not in (None, -1):
+            tecnicos = self._ctx.grupos.tecnicos_del_grupo(
+                gid, es_demo=self._session.es_demo
+            )
+        else:
+            tecnicos = self._ctx.usuarios.tecnicos(es_demo=self._session.es_demo)
+        for t in tecnicos:
+            self.cmb_tecnico.addItem(t.nombre, t.id)
+        if actual is not None:
+            idx = self.cmb_tecnico.findData(actual)
+            if idx < 0 and prefer_id is not None:
+                # Técnico fuera del grupo: mostrarlo igual para no perder la asignación.
+                u = self._ctx.usuarios.obtener(prefer_id)
+                if u:
+                    self.cmb_tecnico.addItem(f"{u.nombre} (otro grupo)", u.id)
+                    idx = self.cmb_tecnico.findData(prefer_id)
+            self.cmb_tecnico.setCurrentIndex(idx if idx >= 0 else 0)
+        else:
+            self.cmb_tecnico.setCurrentIndex(0)
+        self.cmb_tecnico.blockSignals(False)
+
+    def _on_grupo_cambiado(self) -> None:
+        self._rellenar_tecnicos()
 
     def _on_mias_toggled(self, checked: bool) -> None:
         if checked:
@@ -529,7 +672,7 @@ class IncidenciasView(QWidget):
             kwargs["prioridad"] = Prioridad(prio_val)
         cat_val = self.filtro_categoria.currentData()
         if cat_val:
-            kwargs["categoria"] = CategoriaIncidencia(cat_val)
+            kwargs["categoria"] = cat_val
         texto = self.busqueda.text().strip()
         if texto:
             kwargs["texto"] = texto
@@ -557,7 +700,7 @@ class IncidenciasView(QWidget):
             vals = [
                 inc.codigo,
                 f"{inc.prioridad.icono} {inc.titulo}",
-                inc.categoria.value,
+                inc.categoria_etiqueta,
                 inc.prioridad.value,
                 estado_col,
                 inc.equipo_nombre or "",
@@ -618,10 +761,9 @@ class IncidenciasView(QWidget):
                 item.widget().deleteLater()
         self.detalle_desc.setText("(sin selección)")
         self.lista_adjuntos.clear()
-        self.lista_comentarios.clear()
+        self.lista_kb.clear()
+        self.timeline.clear()
         self.comentario_input.clear()
-        self.lista_intervenciones.clear()
-        self.lista_historial.clear()
         self.lista_repuestos.clear()
         self._set_actions_enabled(False)
 
@@ -674,14 +816,37 @@ class IncidenciasView(QWidget):
         )
         _meta_row(self.meta_grid, 0, "Usuario", inc.usuario_nombre or "—")
         _meta_row(self.meta_grid, 1, "Equipo", inc.equipo_nombre or "—")
-        _meta_row(self.meta_grid, 2, "Categoría", inc.categoria.value)
-        _meta_row(self.meta_grid, 3, "Prioridad", inc.prioridad.value)
-        _meta_row(self.meta_grid, 4, "Estado", estado_txt)
-        _meta_row(self.meta_grid, 5, "SLA", sla_txt)
-        _meta_row(self.meta_grid, 6, "Fecha", fecha or "—")
-        _meta_row(self.meta_grid, 7, "Técnico", inc.tecnico_nombre or "Sin asignar")
+        hoja = resolver_categoria(inc.categoria)
+        sla_cat = hoja.perfil.sla.etiqueta if hoja else "—"
+        grupo_txt = inc.grupo_nombre or (
+            hoja.perfil.grupo.nombre if hoja else "—"
+        )
+        _meta_row(self.meta_grid, 2, "Categoría", inc.categoria_etiqueta)
+        _meta_row(self.meta_grid, 3, "Grupo", grupo_txt)
+        _meta_row(self.meta_grid, 4, "Prioridad", inc.prioridad.value)
+        _meta_row(self.meta_grid, 5, "Estado", estado_txt)
+        _meta_row(
+            self.meta_grid,
+            6,
+            "SLA",
+            f"{sla_txt} (política {sla_cat})",
+        )
+        _meta_row(self.meta_grid, 7, "Fecha", fecha or "—")
+        _meta_row(self.meta_grid, 8, "Técnico", inc.tecnico_nombre or "Sin asignar")
 
         self.detalle_desc.setText(inc.descripcion or "(sin descripción)")
+
+        self.lista_kb.clear()
+        relacionados = self._ctx.conocimiento.sugerir_para_categoria(
+            inc.categoria, limite=5
+        )
+        if relacionados:
+            for art in relacionados:
+                item = QListWidgetItem(f"🔧  {art.titulo}")
+                item.setData(Qt.ItemDataRole.UserRole, art.id)
+                self.lista_kb.addItem(item)
+        else:
+            self.lista_kb.addItem("(sin artículos relacionados)")
 
         self.lista_adjuntos.clear()
         if inc.adjuntos:
@@ -695,34 +860,7 @@ class IncidenciasView(QWidget):
         else:
             self.lista_adjuntos.addItem("(sin adjuntos)")
 
-        self.lista_comentarios.clear()
-        if inc.comentarios:
-            for c in inc.comentarios:
-                quien = c.usuario_nombre or "usuario"
-                self.lista_comentarios.addItem(
-                    f"{(c.fecha or '')[:16]} · {quien}: {c.texto}"
-                )
-        else:
-            self.lista_comentarios.addItem("(sin comentarios)")
-
-        self.lista_intervenciones.clear()
-        if inc.intervenciones:
-            for iv in inc.intervenciones:
-                self.lista_intervenciones.addItem(
-                    f"{(iv.fecha or '')[:16]} → {iv.descripcion}"
-                )
-        else:
-            self.lista_intervenciones.addItem("(sin intervenciones)")
-
-        self.lista_historial.clear()
-        if inc.historial:
-            for h in inc.historial:
-                who = h.usuario_nombre or "sistema"
-                self.lista_historial.addItem(
-                    f"{(h.fecha or '')[:16]} · {who}: {h.accion}"
-                )
-        else:
-            self.lista_historial.addItem("(sin historial)")
+        self.timeline.set_events(construir_timeline(inc))
 
         self.lista_repuestos.clear()
         usados = self._ctx.inventario.componentes_de_incidencia(inc_id)
@@ -738,10 +876,13 @@ class IncidenciasView(QWidget):
         self.cmb_prioridad.setCurrentIndex(
             self.cmb_prioridad.findData(inc.prioridad.value)
         )
-        idx = self.cmb_tecnico.findData(
-            inc.tecnico_id if inc.tecnico_id is not None else -1
+        self.cmb_grupo.blockSignals(True)
+        gidx = self.cmb_grupo.findData(
+            inc.grupo_id if inc.grupo_id is not None else -1
         )
-        self.cmb_tecnico.setCurrentIndex(idx if idx >= 0 else 0)
+        self.cmb_grupo.setCurrentIndex(gidx if gidx >= 0 else 0)
+        self.cmb_grupo.blockSignals(False)
+        self._rellenar_tecnicos(prefer_id=inc.tecnico_id)
 
     def _editar_descripcion(self) -> None:
         if not self._current_id:
@@ -812,6 +953,17 @@ class IncidenciasView(QWidget):
             return None
         aid = item.data(Qt.ItemDataRole.UserRole)
         return int(aid) if aid is not None else None
+
+    def _abrir_kb_relacionado(self, item: QListWidgetItem | None = None) -> None:
+        it = item or self.lista_kb.currentItem()
+        if it is None:
+            return
+        aid = it.data(Qt.ItemDataRole.UserRole)
+        if not aid:
+            return
+        art = self._ctx.conocimiento.obtener(aid)
+        if art:
+            ArticuloLecturaDialog(art, parent=self).exec()
 
     def _abrir_adjunto(self, *_args) -> None:
         aid = self._adjunto_seleccionado_id()
@@ -967,25 +1119,47 @@ class IncidenciasView(QWidget):
                 Prioridad(self.cmb_prioridad.currentData()),
                 actor_id=self._session.usuario_id,
             )
+            grupo_id = self.cmb_grupo.currentData()
+            if grupo_id == -1 or grupo_id is None:
+                grupo_id = None
             tecnico_id = self.cmb_tecnico.currentData()
             if tecnico_id == -1 or tecnico_id is None:
-                asignacion = "sin técnico"
-                self._ctx.incidencias.asignar_tecnico(
+                tecnico_id = None
+
+            if grupo_id is not None and tecnico_id is None:
+                self._ctx.incidencias.asignar_grupo(
+                    self._current_id,
+                    grupo_id,
+                    actor_id=self._session.usuario_id,
+                    limpiar_tecnico=True,
+                    avisar_bandeja=False,
+                )
+                asignacion = f"cola {self.cmb_grupo.currentText()}"
+            elif tecnico_id is None:
+                self._ctx.incidencias.asignar_grupo(
                     self._current_id,
                     None,
                     actor_id=self._session.usuario_id,
+                    limpiar_tecnico=True,
                     avisar_bandeja=False,
                 )
+                asignacion = "sin grupo ni técnico"
             else:
                 nombre = self.cmb_tecnico.currentText()
-                asignacion = f"asignada a {nombre}"
                 self._ctx.incidencias.asignar_tecnico(
                     self._current_id,
                     tecnico_id,
                     actor_id=self._session.usuario_id,
                     tecnico_nombre=nombre,
+                    grupo_id=grupo_id,
                     avisar_bandeja=False,
                 )
+                if grupo_id is not None:
+                    asignacion = (
+                        f"{self.cmb_grupo.currentText()} → {nombre}"
+                    )
+                else:
+                    asignacion = f"asignada a {nombre}"
             self.refresh()
             self._mostrar(self._current_id)
             inc = self._ctx.incidencias.obtener(
@@ -1053,6 +1227,7 @@ class IncidenciasView(QWidget):
                 data["cantidad"],
                 actor_id=self._session.usuario_id,
                 incidencia_repo=self._ctx.incidencia_repo,
+                equipo_repo=self._ctx.equipo_repo,
             )
             self._mostrar(self._current_id)
             msg = (

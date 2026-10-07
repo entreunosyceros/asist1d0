@@ -12,6 +12,7 @@ import csv
 import shutil
 import uuid
 from collections.abc import Callable
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -24,19 +25,39 @@ from app.database.repositories import (
     IncidenciaRepository,
     UsuarioRepository,
 )
+from app.models.audit import AuditAction, AuditEntity
 from app.models.componente import Componente
-from app.models.enums import CategoriaIncidencia, EstadoIncidencia, Prioridad, Rol
-from app.models.equipo import Equipo
+from app.models.catalogo_categorias import normalizar_codigo, resolver_categoria
+from app.models.enums import EstadoIncidencia, Prioridad, Rol
+from app.database.repositories.grupo_repository import GrupoRepository
+from app.models.equipo import Equipo, EquipoComponente, EquipoReparacion, EquipoSoftware
 from app.models.incidencia import Adjunto, Comentario, Incidencia, Intervencion
 from app.models.usuario import Usuario
+from app.services.audit_service import AuditService
 from app.services.notificador import Notificador, NotificadorCompuesto, NotificadorConsola, NotificadorEmail
+
+
+def _parse_fecha_incidencia(texto: Optional[str]) -> Optional[datetime]:
+    """Parsea fechas SQLite ``YYYY-MM-DD[ HH:MM:SS]`` usadas en incidencias."""
+    if not texto:
+        return None
+    raw = texto.strip()
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(raw[:19], fmt)
+        except ValueError:
+            continue
+    return None
 
 
 class UsuarioService:
     """Alta, edición, baja y consulta de cuentas de usuario."""
 
-    def __init__(self, repo: UsuarioRepository) -> None:
+    def __init__(
+        self, repo: UsuarioRepository, audit: Optional[AuditService] = None
+    ) -> None:
         self._repo = repo
+        self._audit = audit
 
     def _contar_administradores(self) -> int:
         """Número de cuentas con rol administrador (demo + reales)."""
@@ -61,6 +82,8 @@ class UsuarioService:
         rol: Rol = Rol.USUARIO,
         telefono: str = "",
         es_demo: bool = False,
+        *,
+        actor_id: Optional[int] = None,
     ) -> Usuario:
         if self._repo.obtener_por_email(email):
             raise ValueError("Ya existe un usuario con ese email")
@@ -73,6 +96,16 @@ class UsuarioService:
             _es_demo=es_demo,
         )
         u.id = self._repo.crear(u)
+        if self._audit:
+            actor = self._repo.obtener_por_id(actor_id) if actor_id else None
+            quien = actor.nombre if actor else "Sistema"
+            self._audit.registrar(
+                actor_id,
+                AuditAction.CREAR,
+                AuditEntity.USUARIO,
+                u.id,
+                f"{quien} creó usuario #{u.id} (rol={u.rol.value})",
+            )
         return u
 
     def actualizar(
@@ -103,19 +136,36 @@ class UsuarioService:
         if pierde_admin and self._contar_administradores() <= 1:
             raise ValueError("Debe quedar al menos un administrador en el sistema.")
 
-        if nombre is not None:
+        cambios: list[str] = []
+        if nombre is not None and nombre != usuario.nombre:
+            cambios.append("nombre")
             usuario.nombre = nombre
-        if email is not None:
+        if email is not None and email.lower() != usuario.email:
+            cambios.append("email")
             usuario.email = email
         if telefono is not None:
             usuario.telefono = telefono
-        if rol is not None:
+            cambios.append("telefono")
+        if rol is not None and rol != rol_anterior:
+            cambios.append(f"rol={rol_anterior.value}→{rol.value}")
             usuario._rol = rol
         if password:
             usuario.password_hash = hash_password(password)
-        if activo is not None:
+            cambios.append("password")
+        if activo is not None and activo != usuario.activo:
+            cambios.append(f"activo={activo}")
             usuario.activo = activo
         self._repo.actualizar(usuario)
+        if self._audit and cambios:
+            actor = self._repo.obtener_por_id(actor_id) if actor_id else None
+            quien = actor.nombre if actor else "Sistema"
+            self._audit.registrar(
+                actor_id,
+                AuditAction.ACTUALIZAR,
+                AuditEntity.USUARIO,
+                usuario.id,
+                f"{quien} actualizó usuario #{usuario.id} ({', '.join(cambios)})",
+            )
         return usuario
 
     def eliminar(self, usuario_id: int, *, actor_id: Optional[int] = None) -> None:
@@ -126,7 +176,18 @@ class UsuarioService:
             raise ValueError("Usuario no encontrado")
         if objetivo.es_admin() and self._contar_administradores() <= 1:
             raise ValueError("No se puede eliminar al último administrador.")
+        email = objetivo.email
         self._repo.eliminar(usuario_id)
+        if self._audit:
+            actor = self._repo.obtener_por_id(actor_id) if actor_id else None
+            quien = actor.nombre if actor else "Sistema"
+            self._audit.registrar(
+                actor_id,
+                AuditAction.ELIMINAR,
+                AuditEntity.USUARIO,
+                usuario_id,
+                f"{quien} eliminó usuario #{usuario_id} ({email})",
+            )
 
     def tecnicos(self, es_demo: Optional[bool] = None) -> list[Usuario]:
         return self._repo.listar(
@@ -139,16 +200,19 @@ class UsuarioService:
 class EquipoService:
     """Gestión de equipos informáticos vinculados a usuarios."""
 
-    def __init__(self, repo: EquipoRepository) -> None:
+    def __init__(
+        self, repo: EquipoRepository, audit: Optional[AuditService] = None
+    ) -> None:
         self._repo = repo
+        self._audit = audit
 
     def listar(
         self, usuario_id: Optional[int] = None, es_demo: Optional[bool] = None
     ) -> list[Equipo]:
         return self._repo.listar(usuario_id=usuario_id, es_demo=es_demo)
 
-    def obtener(self, equipo_id: int) -> Optional[Equipo]:
-        return self._repo.obtener_por_id(equipo_id)
+    def obtener(self, equipo_id: int, *, con_detalle: bool = False) -> Optional[Equipo]:
+        return self._repo.obtener_por_id(equipo_id, con_detalle=con_detalle)
 
     def crear(
         self,
@@ -157,6 +221,12 @@ class EquipoService:
         marca: str,
         modelo: str,
         sistema_operativo: str = "",
+        *,
+        cpu: str = "",
+        ram_gb: int = 0,
+        almacenamiento: str = "",
+        gpu: str = "",
+        actor_id: Optional[int] = None,
     ) -> Equipo:
         eq = Equipo(
             _usuario_id=usuario_id,
@@ -164,8 +234,20 @@ class EquipoService:
             _marca=marca,
             _modelo=modelo,
             _sistema_operativo=sistema_operativo,
+            _cpu=cpu,
+            _ram_gb=ram_gb,
+            _almacenamiento=almacenamiento,
+            _gpu=gpu,
         )
         eq.id = self._repo.crear(eq)
+        if self._audit:
+            self._audit.registrar(
+                actor_id,
+                AuditAction.CREAR,
+                AuditEntity.EQUIPO,
+                eq.id,
+                f"Creó equipo {eq.codigo} ({marca} {modelo}, serie={numero_serie})",
+            )
         return eq
 
     def actualizar(
@@ -180,15 +262,148 @@ class EquipoService:
             if actor_id is None or equipo.usuario_id != actor_id:
                 raise PermissionError("Solo puedes editar tus propios equipos")
         self._repo.actualizar(equipo)
+        if self._audit:
+            self._audit.registrar(
+                actor_id,
+                AuditAction.ACTUALIZAR,
+                AuditEntity.EQUIPO,
+                equipo.id,
+                f"Actualizó equipo {equipo.codigo} ({equipo.marca} {equipo.modelo})",
+            )
         return equipo
 
-    def eliminar(self, equipo_id: int) -> None:
+    def eliminar(
+        self, equipo_id: int, *, actor_id: Optional[int] = None
+    ) -> None:
+        eq = self._repo.obtener_por_id(equipo_id)
         self._repo.eliminar(equipo_id)
+        if self._audit:
+            detalle = f"Eliminó equipo #{equipo_id}"
+            if eq:
+                detalle = (
+                    f"Eliminó equipo {eq.codigo} "
+                    f"({eq.marca} {eq.modelo}, serie={eq.numero_serie})"
+                )
+            self._audit.registrar(
+                actor_id,
+                AuditAction.ELIMINAR,
+                AuditEntity.EQUIPO,
+                equipo_id,
+                detalle,
+            )
 
     def contar(
         self, usuario_id: Optional[int] = None, es_demo: Optional[bool] = None
     ) -> int:
         return self._repo.contar(usuario_id=usuario_id, es_demo=es_demo)
+
+    def anadir_componente(
+        self,
+        equipo_id: int,
+        componente_id: int,
+        cantidad: int = 1,
+        notas: str = "",
+        *,
+        actor_id: Optional[int] = None,
+    ) -> EquipoComponente:
+        item = EquipoComponente(
+            _equipo_id=equipo_id,
+            _componente_id=componente_id,
+            _cantidad=max(1, cantidad),
+            _notas=notas,
+        )
+        item._id = self._repo.anadir_componente(item)
+        if self._audit:
+            self._audit.registrar(
+                actor_id,
+                AuditAction.ACTUALIZAR,
+                AuditEntity.EQUIPO,
+                equipo_id,
+                f"Componente #{componente_id} × {cantidad} en equipo #{equipo_id}",
+            )
+        rows = self._repo.listar_componentes(equipo_id)
+        return rows[0] if rows else item
+
+    def quitar_componente(
+        self, item_id: int, equipo_id: int, *, actor_id: Optional[int] = None
+    ) -> None:
+        self._repo.eliminar_componente(item_id)
+        if self._audit:
+            self._audit.registrar(
+                actor_id,
+                AuditAction.ACTUALIZAR,
+                AuditEntity.EQUIPO,
+                equipo_id,
+                f"Quitó componente instalado #{item_id} del equipo #{equipo_id}",
+            )
+
+    def anadir_software(
+        self,
+        equipo_id: int,
+        nombre: str,
+        version: str = "",
+        licencia: str = "",
+        *,
+        actor_id: Optional[int] = None,
+    ) -> EquipoSoftware:
+        item = EquipoSoftware(
+            _equipo_id=equipo_id,
+            _nombre=nombre,
+            _version=version,
+            _licencia=licencia,
+        )
+        item._id = self._repo.anadir_software(item)
+        if self._audit:
+            self._audit.registrar(
+                actor_id,
+                AuditAction.ACTUALIZAR,
+                AuditEntity.EQUIPO,
+                equipo_id,
+                f"Software «{nombre}» en equipo #{equipo_id}",
+            )
+        return item
+
+    def quitar_software(
+        self, item_id: int, equipo_id: int, *, actor_id: Optional[int] = None
+    ) -> None:
+        self._repo.eliminar_software(item_id)
+        if self._audit:
+            self._audit.registrar(
+                actor_id,
+                AuditAction.ACTUALIZAR,
+                AuditEntity.EQUIPO,
+                equipo_id,
+                f"Quitó software #{item_id} del equipo #{equipo_id}",
+            )
+
+    def registrar_reparacion(
+        self,
+        equipo_id: int,
+        descripcion: str,
+        *,
+        tecnico_id: Optional[int] = None,
+        incidencia_id: Optional[int] = None,
+        coste: float = 0.0,
+        actor_id: Optional[int] = None,
+    ) -> EquipoReparacion:
+        item = EquipoReparacion(
+            _equipo_id=equipo_id,
+            _descripcion=descripcion,
+            _tecnico_id=tecnico_id,
+            _incidencia_id=incidencia_id,
+            _coste=coste,
+        )
+        item._id = self._repo.anadir_reparacion(item)
+        if self._audit:
+            self._audit.registrar(
+                actor_id,
+                AuditAction.ACTUALIZAR,
+                AuditEntity.EQUIPO,
+                equipo_id,
+                f"Reparación en equipo #{equipo_id}: {descripcion[:80]}",
+            )
+        rows = self._repo.listar_reparaciones(equipo_id)
+        return next((r for r in rows if r.id == item.id), item)
 
 class IncidenciaService:
     """Casos de uso de incidencias: alta, estado, asignación e intervenciones."""
@@ -197,11 +412,15 @@ class IncidenciaService:
         self,
         repo: IncidenciaRepository,
         notificador: Optional[Notificador] = None,
+        audit: Optional[AuditService] = None,
+        grupos: Optional[GrupoRepository] = None,
     ) -> None:
         self._repo = repo
         self._notificador = notificador or NotificadorCompuesto(
             NotificadorConsola(), NotificadorEmail()
         )
+        self._audit = audit
+        self._grupos = grupos
         self._tray_notify: Callable[[str, str], None] | None = None
         self._tray_user_id: int | None = None
 
@@ -256,37 +475,61 @@ class IncidenciaService:
         titulo: str,
         descripcion: str = "",
         prioridad: Prioridad = Prioridad.MEDIA,
-        categoria: CategoriaIncidencia = CategoriaIncidencia.OTRO,
+        categoria: str = "Otro",
         actor_id: Optional[int] = None,
         tecnico_id: Optional[int] = None,
+        grupo_id: Optional[int] = None,
     ) -> Incidencia:
-        if isinstance(categoria, str):
-            categoria = CategoriaIncidencia(categoria)
+        cat_codigo = normalizar_codigo(
+            getattr(categoria, "value", categoria) if categoria else "Otro"
+        )
+        # Si no se indica grupo, tomar el de la categoría del catálogo.
+        if grupo_id is None and self._grupos is not None:
+            hoja = resolver_categoria(cat_codigo)
+            if hoja is not None:
+                g = self._grupos.obtener_por_codigo(hoja.perfil.grupo.codigo)
+                if g is not None:
+                    grupo_id = g.id
         with self._repo._db.transaction() as conn:
             cur = conn.execute(
                 """
                 INSERT INTO incidencias
-                    (equipo_id, tecnico_id, titulo, descripcion, categoria, estado, prioridad)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                    (equipo_id, tecnico_id, grupo_id, titulo, descripcion,
+                     categoria, estado, prioridad)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     equipo_id,
                     tecnico_id,
+                    grupo_id,
                     titulo,
                     descripcion,
-                    categoria.value,
+                    cat_codigo,
                     EstadoIncidencia.ABIERTA.value,
                     prioridad.value,
                 ),
             )
             inc_id = cur.lastrowid
+            hist = f"Incidencia creada: {titulo} [{cat_codigo}]"
+            if grupo_id is not None and self._grupos is not None:
+                g = self._grupos.obtener_por_id(grupo_id)
+                if g:
+                    hist += f" → grupo {g.nombre}"
             conn.execute(
                 "INSERT INTO historial (incidencia_id, accion, usuario_id) VALUES (?, ?, ?)",
-                (inc_id, f"Incidencia creada: {titulo} [{categoria.value}]", actor_id),
+                (inc_id, hist, actor_id),
             )
         inc = self._repo.obtener_por_id(inc_id)  # type: ignore[arg-type]
         assert inc is not None
         self._notificador.notificar(inc, f"Nueva incidencia creada con prioridad {prioridad.value}")
+        if self._audit:
+            self._audit.registrar(
+                actor_id,
+                AuditAction.CREAR,
+                AuditEntity.INCIDENCIA,
+                inc.id,
+                f"Creó incidencia #{inc.id}: {titulo} [{cat_codigo}]",
+            )
         return inc
 
     def confirmar_resolucion(
@@ -314,9 +557,18 @@ class IncidenciaService:
             raise ValueError(
                 "Solo puedes confirmar cuando el ticket está En reparación o Pendiente"
             )
-        return self.cambiar_estado(
+        resultado = self.cambiar_estado(
             incidencia_id, EstadoIncidencia.CERRADA, actor_id=actor_id
         )
+        if self._audit:
+            self._audit.registrar(
+                actor_id,
+                AuditAction.CONFIRMAR,
+                AuditEntity.INCIDENCIA,
+                incidencia_id,
+                f"Confirmó resolución de incidencia #{incidencia_id}",
+            )
+        return resultado
 
     def reabrir(
         self,
@@ -345,6 +597,14 @@ class IncidenciaService:
             incidencia_id, "Reabierta por el usuario", actor_id
         )
         self._notificador.notificar(resultado, "Incidencia reabierta por el usuario")
+        if self._audit:
+            self._audit.registrar(
+                actor_id,
+                AuditAction.REABRIR,
+                AuditEntity.INCIDENCIA,
+                incidencia_id,
+                f"Reabrió incidencia #{incidencia_id}",
+            )
         return resultado
 
     def cambiar_estado(
@@ -387,6 +647,14 @@ class IncidenciaService:
         inc = self._repo.obtener_por_id(incidencia_id)
         assert inc is not None
         self._notificador.notificar(inc, f"Estado actualizado a {nuevo_estado.value}")
+        if self._audit:
+            self._audit.registrar(
+                actor_id,
+                AuditAction.CAMBIAR_ESTADO,
+                AuditEntity.INCIDENCIA,
+                incidencia_id,
+                f"Estado: {anterior.value} → {nuevo_estado.value}",
+            )
         if avisar_bandeja:
             dest = [inc.usuario_id] if inc.usuario_id is not None else []
             texto = f"Estado actualizado a {nuevo_estado.value}"
@@ -418,7 +686,69 @@ class IncidenciaService:
             f"Prioridad: {anterior.value} → {prioridad.value}",
             actor_id,
         )
+        if self._audit:
+            self._audit.registrar(
+                actor_id,
+                AuditAction.ACTUALIZAR,
+                AuditEntity.INCIDENCIA,
+                incidencia_id,
+                f"Prioridad: {anterior.value} → {prioridad.value}",
+            )
         return self._repo.obtener_por_id(incidencia_id)  # type: ignore[return-value]
+
+    def asignar_grupo(
+        self,
+        incidencia_id: int,
+        grupo_id: Optional[int],
+        actor_id: Optional[int] = None,
+        *,
+        limpiar_tecnico: bool = False,
+        avisar_bandeja: bool = True,
+    ) -> Incidencia:
+        """Asigna la incidencia a un grupo (cola). Opcionalmente quita el técnico."""
+        if grupo_id is not None and self._grupos is not None:
+            if self._grupos.obtener_por_id(grupo_id) is None:
+                raise ValueError("Grupo no encontrado")
+        if limpiar_tecnico:
+            self._repo._db.execute(
+                "UPDATE incidencias SET grupo_id = ?, tecnico_id = NULL WHERE id = ?",
+                (grupo_id, incidencia_id),
+            )
+        else:
+            self._repo._db.execute(
+                "UPDATE incidencias SET grupo_id = ? WHERE id = ?",
+                (grupo_id, incidencia_id),
+            )
+        if grupo_id is None:
+            accion = "Grupo desasignado"
+        else:
+            nombre = f"id={grupo_id}"
+            if self._grupos is not None:
+                g = self._grupos.obtener_por_id(grupo_id)
+                if g:
+                    nombre = g.nombre
+            accion = f"Asignada al grupo {nombre}"
+        self._repo.agregar_historial(incidencia_id, accion, actor_id)
+        inc = self._repo.obtener_por_id(incidencia_id)
+        assert inc is not None
+        self._notificador.notificar(inc, accion)
+        if self._audit:
+            self._audit.registrar(
+                actor_id,
+                AuditAction.ASIGNAR,
+                AuditEntity.INCIDENCIA,
+                incidencia_id,
+                accion,
+            )
+        if avisar_bandeja:
+            self._tray_aviso(
+                [],
+                inc.codigo,
+                accion,
+                actor_id,
+                mensaje_actor=accion,
+            )
+        return inc
 
     def asignar_tecnico(
         self,
@@ -427,21 +757,44 @@ class IncidenciaService:
         actor_id: Optional[int] = None,
         tecnico_nombre: Optional[str] = None,
         *,
+        grupo_id: Optional[int] = None,
         avisar_bandeja: bool = True,
     ) -> Incidencia:
-        self._repo._db.execute(
-            "UPDATE incidencias SET tecnico_id = ? WHERE id = ?",
-            (tecnico_id, incidencia_id),
-        )
+        """
+        Asigna un técnico. Si se pasa ``grupo_id``, actualiza también el grupo
+        (flujo Grupo → Técnico).
+        """
+        if grupo_id is not None:
+            self._repo._db.execute(
+                "UPDATE incidencias SET tecnico_id = ?, grupo_id = ? WHERE id = ?",
+                (tecnico_id, grupo_id, incidencia_id),
+            )
+        else:
+            self._repo._db.execute(
+                "UPDATE incidencias SET tecnico_id = ? WHERE id = ?",
+                (tecnico_id, incidencia_id),
+            )
         if tecnico_id is None:
             accion = "Técnico desasignado"
         else:
             nombre = tecnico_nombre or f"id={tecnico_id}"
             accion = f"Asignada a {nombre}"
+            if grupo_id is not None and self._grupos is not None:
+                g = self._grupos.obtener_por_id(grupo_id)
+                if g:
+                    accion = f"Asignada a {nombre} (grupo {g.nombre})"
         self._repo.agregar_historial(incidencia_id, accion, actor_id)
         inc = self._repo.obtener_por_id(incidencia_id)
         assert inc is not None
         self._notificador.notificar(inc, accion)
+        if self._audit:
+            self._audit.registrar(
+                actor_id,
+                AuditAction.ASIGNAR,
+                AuditEntity.INCIDENCIA,
+                incidencia_id,
+                accion,
+            )
         if avisar_bandeja:
             if tecnico_id is not None:
                 self._tray_aviso(
@@ -507,6 +860,14 @@ class IncidenciaService:
             usuario_id,
             mensaje_actor="Comentario enviado",
         )
+        if self._audit:
+            self._audit.registrar(
+                usuario_id,
+                AuditAction.COMENTAR,
+                AuditEntity.COMENTARIO,
+                comentario.id,
+                f"Comentario en incidencia #{incidencia_id}: {preview}",
+            )
         rows = self._repo.listar_comentarios(incidencia_id)
         return rows[-1] if rows else comentario
 
@@ -590,6 +951,14 @@ class IncidenciaService:
             f"Adjunto añadido: {origen.name}",
             usuario_id,
         )
+        if self._audit:
+            self._audit.registrar(
+                usuario_id,
+                AuditAction.ADJUNTAR,
+                AuditEntity.ADJUNTO,
+                adjunto.id,
+                f"Adjunto en incidencia #{incidencia_id}: {origen.name}",
+            )
         return adjunto
 
     def ruta_adjunto(self, adjunto: Adjunto) -> Path:
@@ -624,6 +993,14 @@ class IncidenciaService:
             f"Adjunto eliminado: {adj.nombre_original}",
             actor_id,
         )
+        if self._audit:
+            self._audit.registrar(
+                actor_id,
+                AuditAction.ELIMINAR,
+                AuditEntity.ADJUNTO,
+                adjunto_id,
+                f"Adjunto eliminado de incidencia #{adj.incidencia_id}: {adj.nombre_original}",
+            )
 
     def agregar_intervencion(
         self,
@@ -665,15 +1042,84 @@ class IncidenciaService:
         usuario_id: Optional[int] = None,
         es_demo: Optional[bool] = None,
     ) -> dict:
+        """KPIs del dashboard: estados, SLA, técnicos y compatibilidad legacy."""
+        abiertas = self._repo.contar(
+            usuario_id=usuario_id,
+            estado=EstadoIncidencia.ABIERTA,
+            es_demo=es_demo,
+        )
+        en_proceso = self._repo.contar(
+            usuario_id=usuario_id,
+            estado=EstadoIncidencia.EN_REPARACION,
+            es_demo=es_demo,
+        )
+        pendientes = self._repo.contar(
+            usuario_id=usuario_id,
+            estado=EstadoIncidencia.PENDIENTE,
+            es_demo=es_demo,
+        )
+        resueltas = self._repo.contar(
+            usuario_id=usuario_id,
+            estado=EstadoIncidencia.CERRADA,
+            es_demo=es_demo,
+        )
+        abiertas_total = self._repo.contar(
+            usuario_id=usuario_id, solo_abiertas=True, es_demo=es_demo
+        )
+
+        abiertas_list = self._repo.listar(
+            usuario_id=usuario_id, solo_abiertas=True, es_demo=es_demo
+        )
+        vencidas = sum(1 for inc in abiertas_list if inc.vencida)
+
+        cerradas = self._repo.listar(
+            usuario_id=usuario_id,
+            estado=EstadoIncidencia.CERRADA,
+            es_demo=es_demo,
+        )
+        sla_ok = 0
+        sla_medidas = 0
+        for inc in cerradas:
+            limite = inc.fecha_limite
+            cierre = _parse_fecha_incidencia(inc.fecha_cierre)
+            if limite is None or cierre is None:
+                continue
+            sla_medidas += 1
+            if cierre <= limite:
+                sla_ok += 1
+        sla_pct = (
+            round(100.0 * sla_ok / sla_medidas, 1) if sla_medidas else None
+        )
+
+        horas: list[float] = []
+        for inc in cerradas:
+            ini = _parse_fecha_incidencia(inc.fecha_creacion)
+            fin = _parse_fecha_incidencia(inc.fecha_cierre)
+            if ini and fin and fin >= ini:
+                horas.append((fin - ini).total_seconds() / 3600.0)
+        tiempo_medio = round(sum(horas) / len(horas), 1) if horas else None
+
+        tech_counts: dict[str, int] = {}
+        for inc in abiertas_list:
+            nombre = (inc.tecnico_nombre or "").strip() or "Sin asignar"
+            tech_counts[nombre] = tech_counts.get(nombre, 0) + 1
+        por_tecnico = [
+            {"tecnico": k, "total": v}
+            for k, v in sorted(
+                tech_counts.items(), key=lambda kv: (-kv[1], kv[0])
+            )
+        ]
+
         return {
-            "abiertas": self._repo.contar(
-                usuario_id=usuario_id, solo_abiertas=True, es_demo=es_demo
-            ),
-            "pendientes": self._repo.contar(
-                usuario_id=usuario_id,
-                estado=EstadoIncidencia.PENDIENTE,
-                es_demo=es_demo,
-            ),
+            "abiertas": abiertas,
+            "en_proceso": en_proceso,
+            "pendientes": pendientes,
+            "vencidas": vencidas,
+            "resueltas": resueltas,
+            "abiertas_total": abiertas_total,
+            "sla_cumplimiento_pct": sla_pct,
+            "tiempo_medio_horas": tiempo_medio,
+            "por_tecnico": por_tecnico,
             "alta_prioridad": self._repo.contar(
                 usuario_id=usuario_id,
                 solo_abiertas=True,
@@ -693,8 +1139,11 @@ class IncidenciaService:
 class InventarioService:
     """Stock de componentes/repuestos y consumo en reparaciones."""
 
-    def __init__(self, repo: ComponenteRepository) -> None:
+    def __init__(
+        self, repo: ComponenteRepository, audit: Optional[AuditService] = None
+    ) -> None:
         self._repo = repo
+        self._audit = audit
 
     def listar(self, es_demo: Optional[bool] = None) -> list[Componente]:
         return self._repo.listar(es_demo=es_demo)
@@ -711,6 +1160,8 @@ class InventarioService:
         precio: float = 0.0,
         descripcion: str = "",
         es_demo: bool = False,
+        *,
+        actor_id: Optional[int] = None,
     ) -> Componente:
         nombre = (nombre or "").strip()
         if not nombre:
@@ -725,14 +1176,45 @@ class InventarioService:
             _es_demo=es_demo,
         )
         c.id = self._repo.crear(c)
+        if self._audit:
+            self._audit.registrar(
+                actor_id,
+                AuditAction.CREAR,
+                AuditEntity.COMPONENTE,
+                c.id,
+                f"Creó componente #{c.id} ({nombre}, stock={stock})",
+            )
         return c
 
-    def actualizar(self, componente: Componente) -> Componente:
+    def actualizar(
+        self, componente: Componente, *, actor_id: Optional[int] = None
+    ) -> Componente:
         self._repo.actualizar(componente)
+        if self._audit:
+            self._audit.registrar(
+                actor_id,
+                AuditAction.ACTUALIZAR,
+                AuditEntity.COMPONENTE,
+                componente.id,
+                f"Actualizó componente #{componente.id} "
+                f"({componente.nombre}, stock={componente.stock})",
+            )
         return componente
 
-    def eliminar(self, componente_id: int) -> None:
+    def eliminar(
+        self, componente_id: int, *, actor_id: Optional[int] = None
+    ) -> None:
+        comp = self._repo.obtener_por_id(componente_id)
         self._repo.eliminar(componente_id)
+        if self._audit:
+            nombre = comp.nombre if comp else f"#{componente_id}"
+            self._audit.registrar(
+                actor_id,
+                AuditAction.ELIMINAR,
+                AuditEntity.COMPONENTE,
+                componente_id,
+                f"Eliminó componente #{componente_id} ({nombre})",
+            )
 
     def usar_en_incidencia(
         self,
@@ -741,15 +1223,46 @@ class InventarioService:
         cantidad: int = 1,
         actor_id: Optional[int] = None,
         incidencia_repo: Optional[IncidenciaRepository] = None,
+        equipo_repo: Optional[EquipoRepository] = None,
     ) -> None:
         self._repo.asociar_a_incidencia(incidencia_id, componente_id, cantidad)
+        comp = self._repo.obtener_por_id(componente_id)
+        nombre = comp.nombre if comp else f"#{componente_id}"
         if incidencia_repo is not None:
-            comp = self._repo.obtener_por_id(componente_id)
-            nombre = comp.nombre if comp else f"#{componente_id}"
             incidencia_repo.agregar_historial(
                 incidencia_id,
                 f"Repuesto usado: {nombre} × {cantidad}",
                 actor_id,
+            )
+            # Relaciona el repuesto también con el equipo del ticket.
+            if equipo_repo is not None:
+                inc = incidencia_repo.obtener_por_id(
+                    incidencia_id, con_detalle=False
+                )
+                if inc is not None:
+                    equipo_repo.anadir_componente(
+                        EquipoComponente(
+                            _equipo_id=inc.equipo_id,
+                            _componente_id=componente_id,
+                            _cantidad=max(1, cantidad),
+                            _notas=f"Instalado vía {getattr(inc, 'codigo', incidencia_id)}",
+                        )
+                    )
+                    equipo_repo.anadir_reparacion(
+                        EquipoReparacion(
+                            _equipo_id=inc.equipo_id,
+                            _descripcion=f"Repuesto instalado: {nombre} × {cantidad}",
+                            _tecnico_id=actor_id,
+                            _incidencia_id=incidencia_id,
+                        )
+                    )
+        if self._audit:
+            self._audit.registrar(
+                actor_id,
+                AuditAction.USAR_REPUESTO,
+                AuditEntity.COMPONENTE,
+                componente_id,
+                f"Usó repuesto {nombre} × {cantidad} en incidencia #{incidencia_id}",
             )
 
     def componentes_de_incidencia(self, incidencia_id: int) -> list[dict]:
@@ -833,6 +1346,101 @@ class ReportService:
         if row and row["media"] is not None:
             return round(float(row["media"]), 2)
         return None
+
+    def por_dia(self, dias: int = 14, es_demo: Optional[bool] = None) -> list[dict]:
+        """Incidencias creadas por día (últimos ``dias``, rellenando ceros)."""
+        extra, params = self._filtro_demo_sql(es_demo)
+        rows = self._db.fetchall(
+            f"""
+            SELECT date(i.fecha_creacion) AS dia, COUNT(*) AS total
+            FROM incidencias i
+            JOIN equipos e ON e.id = i.equipo_id
+            JOIN usuarios u ON u.id = e.usuario_id
+            WHERE date(i.fecha_creacion) >= date('now', 'localtime', ?)
+            {extra}
+            GROUP BY date(i.fecha_creacion)
+            ORDER BY dia
+            """,
+            [f"-{max(dias - 1, 0)} days", *params],
+        )
+        by_day = {str(r["dia"]): int(r["total"]) for r in rows}
+        hoy = datetime.now().date()
+        out: list[dict] = []
+        for offset in range(dias - 1, -1, -1):
+            d = hoy - timedelta(days=offset)
+            key = d.isoformat()
+            out.append(
+                {
+                    "dia": key,
+                    "etiqueta": d.strftime("%d/%m"),
+                    "total": by_day.get(key, 0),
+                }
+            )
+        return out
+
+    def por_categoria(self, es_demo: Optional[bool] = None) -> list[dict]:
+        extra, params = self._filtro_demo_sql(es_demo)
+        rows = self._db.fetchall(
+            f"""
+            SELECT COALESCE(NULLIF(i.categoria, ''), 'Otro') AS categoria,
+                   COUNT(*) AS total
+            FROM incidencias i
+            JOIN equipos e ON e.id = i.equipo_id
+            JOIN usuarios u ON u.id = e.usuario_id
+            WHERE 1=1{extra}
+            GROUP BY COALESCE(NULLIF(i.categoria, ''), 'Otro')
+            ORDER BY total DESC
+            """,
+            params,
+        )
+        result = []
+        for r in rows:
+            cat = str(r["categoria"])
+            # Mostrar hoja del catálogo si viene como Familia/Hoja.
+            etiqueta = cat.split("/")[-1] if "/" in cat else cat
+            result.append({"categoria": etiqueta, "total": int(r["total"])})
+        return result
+
+    def tiempo_medio_por_dia(
+        self, dias: int = 14, es_demo: Optional[bool] = None
+    ) -> list[dict]:
+        """Media de horas de resolución de tickets cerrados cada día."""
+        extra, params = self._filtro_demo_sql(es_demo)
+        rows = self._db.fetchall(
+            f"""
+            SELECT date(i.fecha_cierre) AS dia,
+                   AVG(
+                       (julianday(i.fecha_cierre) - julianday(i.fecha_creacion)) * 24.0
+                   ) AS media
+            FROM incidencias i
+            JOIN equipos e ON e.id = i.equipo_id
+            JOIN usuarios u ON u.id = e.usuario_id
+            WHERE i.fecha_cierre IS NOT NULL
+              AND date(i.fecha_cierre) >= date('now', 'localtime', ?)
+            {extra}
+            GROUP BY date(i.fecha_cierre)
+            ORDER BY dia
+            """,
+            [f"-{max(dias - 1, 0)} days", *params],
+        )
+        by_day = {
+            str(r["dia"]): round(float(r["media"]), 1)
+            for r in rows
+            if r["media"] is not None
+        }
+        hoy = datetime.now().date()
+        out: list[dict] = []
+        for offset in range(dias - 1, -1, -1):
+            d = hoy - timedelta(days=offset)
+            key = d.isoformat()
+            out.append(
+                {
+                    "dia": key,
+                    "etiqueta": d.strftime("%d/%m"),
+                    "media": by_day.get(key, 0.0),
+                }
+            )
+        return out
 
     def exportar_csv(self, destino: Path, es_demo: Optional[bool] = None) -> Path:
         extra, params = self._filtro_demo_sql(es_demo)

@@ -50,9 +50,13 @@
     state.categorias.forEach((c) => {
       const opt = document.createElement("option");
       opt.value = c.value;
-      opt.textContent = c.value;
-      opt.dataset.titulo = c.titulo;
-      opt.dataset.desc = c.descripcion;
+      opt.textContent = c.ruta || c.value;
+      opt.dataset.titulo = c.titulo || "";
+      opt.dataset.desc = c.descripcion || "";
+      opt.dataset.prioridad = c.prioridad || "Media";
+      opt.dataset.sla = c.sla_etiqueta || "";
+      opt.dataset.grupo = (c.grupo && c.grupo.nombre) || "";
+      opt.dataset.campos = JSON.stringify(c.campos || []);
       sel.appendChild(opt);
     });
     applyPlantilla();
@@ -63,6 +67,64 @@
     if (!opt) return;
     $("nueva-titulo").value = opt.dataset.titulo || "";
     $("nueva-desc").value = opt.dataset.desc || "";
+    const meta = $("nueva-cat-meta");
+    if (meta) {
+      meta.textContent = `SLA: ${opt.dataset.sla || "—"} · Prioridad: ${
+        opt.dataset.prioridad || "—"
+      } · Grupo: ${opt.dataset.grupo || "—"}`;
+    }
+    const prio = $("nueva-prio");
+    if (prio && opt.dataset.prioridad) {
+      prio.value = opt.dataset.prioridad;
+    }
+    const box = $("nueva-campos");
+    if (!box) return;
+    box.innerHTML = "";
+    let campos = [];
+    try {
+      campos = JSON.parse(opt.dataset.campos || "[]");
+    } catch (_) {
+      campos = [];
+    }
+    campos.forEach((campo) => {
+      const label = document.createElement("label");
+      label.textContent =
+        campo.etiqueta + (campo.obligatorio ? " *" : "");
+      const input = document.createElement("input");
+      input.type = "text";
+      input.dataset.clave = campo.clave;
+      input.dataset.obligatorio = campo.obligatorio ? "1" : "0";
+      input.placeholder = campo.hint || "";
+      label.appendChild(input);
+      box.appendChild(label);
+    });
+  }
+
+  function camposEspecificosTexto() {
+    const box = $("nueva-campos");
+    if (!box) return "";
+    const lines = [];
+    box.querySelectorAll("input[data-clave]").forEach((inp) => {
+      const v = (inp.value || "").trim();
+      if (!v) return;
+      const lab = inp.parentElement
+        ? inp.parentElement.childNodes[0].textContent.replace(/\s*\*$/, "").trim()
+        : inp.dataset.clave;
+      lines.push(`• ${lab}: ${v}`);
+    });
+    if (!lines.length) return "";
+    return "\n\nDatos específicos:\n" + lines.join("\n");
+  }
+
+  function validarCamposObligatorios() {
+    const box = $("nueva-campos");
+    if (!box) return true;
+    for (const inp of box.querySelectorAll('input[data-obligatorio="1"]')) {
+      if (!(inp.value || "").trim()) {
+        return false;
+      }
+    }
+    return true;
   }
 
   async function loadIncidencias() {
@@ -213,13 +275,18 @@
 
   $("btn-crear").onclick = async () => {
     $("nueva-error").textContent = "";
+    if (!validarCamposObligatorios()) {
+      $("nueva-error").textContent =
+        "Completa los campos obligatorios de la categoría.";
+      return;
+    }
     try {
       const creada = await api("/incidencias", {
         method: "POST",
         body: JSON.stringify({
           equipo_id: Number($("nueva-equipo").value),
           titulo: $("nueva-titulo").value.trim(),
-          descripcion: $("nueva-desc").value.trim(),
+          descripcion: $("nueva-desc").value.trim() + camposEspecificosTexto(),
           prioridad: $("nueva-prio").value,
           categoria: $("nueva-categoria").value,
         }),

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
@@ -16,6 +16,7 @@ from fastapi.responses import RedirectResponse
 
 from api.auth_tokens import crear_token, decodificar_token
 from api.schemas import (
+    AuditOut,
     ComentarioIn,
     ComentarioOut,
     EquipoIn,
@@ -30,7 +31,9 @@ from app.auth.password import verify_password
 from app.auth.service import SessionContext
 from app.bootstrap import AppContext, bootstrap
 from app.config import API_HOST, API_PORT, BASE_DIR
-from app.models.enums import CategoriaIncidencia, Prioridad, Rol
+from app.models.audit import AuditAction, AuditEntity
+from app.models.catalogo_categorias import catalogo_api, normalizar_codigo
+from app.models.enums import Prioridad, Rol
 from app.models.incidencia import Incidencia
 
 security = HTTPBearer(auto_error=False)
@@ -88,7 +91,7 @@ def _inc_out(inc: Incidencia, *, con_comentarios: bool = False) -> IncidenciaOut
         codigo=inc.codigo,
         titulo=inc.titulo,
         descripcion=inc.descripcion,
-        categoria=inc.categoria.value,
+        categoria=inc.categoria_etiqueta,
         estado=inc.estado.value,
         estado_usuario=inc.estado.etiqueta_usuario,
         prioridad=inc.prioridad.value,
@@ -101,13 +104,35 @@ def _inc_out(inc: Incidencia, *, con_comentarios: bool = False) -> IncidenciaOut
     )
 
 
+def _client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    if request.client:
+        return request.client.host
+    return "api"
+
+
 @app.post("/api/auth/login", response_model=TokenOut)
-def login(body: LoginIn, ctx: AppContext = Depends(get_ctx)) -> TokenOut:
+def login(
+    body: LoginIn,
+    request: Request,
+    ctx: AppContext = Depends(get_ctx),
+) -> TokenOut:
+    # No usar AuthService.login: la sesión en memoria es del escritorio (una sola).
     usuario = ctx.usuario_repo.obtener_por_email(body.email.strip().lower())
     if not usuario or not usuario.activo:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Credenciales incorrectas")
     if not verify_password(body.password, usuario.password_hash):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Credenciales incorrectas")
+    ctx.audit.registrar(
+        usuario.id,
+        AuditAction.LOGIN,
+        AuditEntity.USUARIO,
+        usuario.id,
+        f"Login API de {usuario.email} ({usuario.rol.value})",
+        ip_address=_client_ip(request),
+    )
     token = crear_token(
         usuario.id or 0,
         usuario.email,
@@ -207,9 +232,9 @@ def crear_incidencia(
 ) -> IncidenciaOut:
     try:
         prioridad = Prioridad(body.prioridad)
-        categoria = CategoriaIncidencia(body.categoria)
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    categoria = normalizar_codigo(body.categoria)
     if session.rol == Rol.USUARIO:
         eq = ctx.equipos.obtener(body.equipo_id)
         if not eq or eq.usuario_id != session.usuario_id:
@@ -288,9 +313,48 @@ def reabrir(
 
 @app.get("/api/categorias")
 def categorias() -> list[dict]:
+    """Catálogo jerárquico (hojas) con SLA, prioridad, grupo y campos."""
+    return catalogo_api()
+
+
+@app.get("/api/audit", response_model=list[AuditOut])
+def listar_audit(
+    session: SessionContext = Depends(current_session),
+    ctx: AppContext = Depends(get_ctx),
+    user_id: Optional[int] = None,
+    action: Optional[str] = None,
+    entity_type: Optional[str] = None,
+    entity_id: Optional[int] = None,
+    desde: Optional[str] = None,
+    hasta: Optional[str] = None,
+    texto: Optional[str] = None,
+    limite: int = Query(default=200, ge=1, le=2000),
+) -> list[AuditOut]:
+    if not session.puede_ver_informes_globales():
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Solo admin/técnico")
+    entradas = ctx.audit.listar(
+        user_id=user_id,
+        action=action,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        desde=desde,
+        hasta=hasta,
+        texto=texto,
+        limite=limite,
+    )
     return [
-        {"value": c.value, "titulo": c.plantilla[0], "descripcion": c.plantilla[1]}
-        for c in CategoriaIncidencia
+        AuditOut(
+            id=e.id or 0,
+            timestamp=e.timestamp,
+            user_id=e.user_id,
+            usuario_nombre=e.usuario_nombre,
+            action=e.action,
+            entity_type=e.entity_type,
+            entity_id=e.entity_id,
+            details=e.details or "",
+            ip_address=e.ip_address,
+        )
+        for e in entradas
     ]
 
 

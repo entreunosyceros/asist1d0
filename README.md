@@ -122,12 +122,15 @@ La bandeja muestra avisos breves cuando te asignan una incidencia, cambia su est
 
 ### Módulos
 
-- **Dashboard** — KPIs y accesos rápidos; CTAs si no hay equipo/incidencias
-- **Incidencias** — categorías/plantillas, SLA + badge Vencida, confirmar/reabrir (Usuario), filtros (incl. categoría), comentarios, adjuntos, editar descripción; técnicos: cola, intervenciones, repuestos
-- **Equipos** — alta/edición (Usuario: solo los suyos); doble clic en un ticket del árbol abre Incidencias
-- **Usuarios** — CRUD (admin); lectura para técnico; botón **Mi contraseña** (admin, mismo flujo que Sesión)
-- **Inventario** — componentes/repuestos y control de stock
+- **Búsqueda global** — cuadro `🔎 Buscar…` (Ctrl+K): incidencias, equipos, usuarios, comentarios y artículos a la vez
+- **Dashboard** — paneles INCIDENCIAS / SLA / TÉCNICOS, gráficas nativas (día, categoría, prioridad, resolución, técnico) y accesos rápidos
+- **Incidencias** — catálogo jerárquico, asignación grupo→técnico, sugerencias KB al crear, badge Vencida, timeline, adjuntos
+- **Equipos** — ficha con specs (CPU/RAM/SSD/GPU), árbol de componentes/software/reparaciones/incidencias/usuario; alta/edición
+- **Usuarios** — CRUD (admin) con pertenencia a grupos de soporte; lectura para técnico; **Mi contraseña**
+- **Inventario** — stock de repuestos; al usarlos en un ticket se asocian también al equipo
+- **Base de conocimiento** — artículos de autoayuda ligados a categorías; edición técnico/admin
 - **Informes** — estadísticas por estado/prioridad/técnico y exportación CSV
+- **Auditoría** — trazabilidad global (`audit_log`: quién hizo qué); distinta del historial por ticket
 - **Panel técnico** — consultas predefinidas, historial global y logs
 
 ## Estructura
@@ -149,7 +152,7 @@ Asist1d0/
 
 Misma base SQLite que el escritorio.
 
-**Desde el escritorio:** menú **Ayuda → Abrir portal web…** (también en la bandeja). Si la API no está en marcha, la arranca sola y abre el navegador.
+**Desde el escritorio:** menú **Ir → Abrir portal web…** (también en la bandeja). Si la API no está en marcha, la arranca sola y abre el navegador.
 
 **Manual:**
 
@@ -161,7 +164,12 @@ python run_api.py
 
 Portal: http://127.0.0.1:8765/portal/ (login demo: `juan@asist1d0.local` / `juan123`).
 
-Endpoints útiles bajo `/api/` (Bearer JWT tras `POST /api/auth/login`): incidencias, comentarios, confirmar, reabrir, equipos.
+Endpoints útiles bajo `/api/` (Bearer JWT tras `POST /api/auth/login`): incidencias, comentarios, confirmar, reabrir, equipos, `GET /api/audit` (admin/técnico).
+
+### Auditoría vs historial del ticket
+
+- **Historial / timeline** (en la ficha de la incidencia): actividad unificada del caso (estados, comentarios, intervenciones, repuestos).
+- **Auditoría** (sección Escritorio + `GET /api/audit`): registro transversal de acciones sobre usuarios, equipos, inventario e incidencias, filtrable por actor/acción/fecha/entidad.
 
 ## Email SMTP
 
@@ -169,7 +177,30 @@ Copia [`data/smtp.json.example`](data/smtp.json.example) a `data/smtp.json` y re
 
 ## SLA
 
-Plazo desde la creación: Baja 7 días, Media 3, Alta 1, Crítica 24 h. Los tickets abiertos fuera de plazo muestran **Vencida**.
+Cada categoría del catálogo define su propio SLA en horas (p. ej. Impresora 48 h, Internet 8 h). Si no hay categoría reconocida, se usa el fallback por prioridad: Baja 7 d, Media 3 d, Alta 1 d, Crítica 24 h. Los tickets abiertos fuera de plazo muestran **Vencida**.
+
+### Catálogo de categorías
+
+Árbol Hardware / Software / Red (más Cuenta y Otro). Cada hoja compone prioridad por defecto, SLA, plantilla, grupo de soporte y campos específicos (polimorfismo por familia).
+
+### Grupos de técnicos
+
+Colas reales en BBDD: **Soporte Hardware**, **Soporte Software**, **Redes**, **Sistemas**. Un técnico/admin puede pertenecer a varios. Al crear una incidencia se encola en el grupo de su categoría; luego se puede asignar a un técnico de ese grupo.
+
+### Base de conocimiento
+
+Artículos de autoayuda ligados a categorías del catálogo. Al crear una incidencia aparecen **posibles soluciones** (doble clic para leer). Todos los roles pueden consultar; técnico y admin pueden crear/editar.
+
+### Inventario de equipos (relaciones SQLite)
+
+Cada equipo (`PC-023`) tiene especificaciones (CPU, RAM, almacenamiento, GPU, SO) y tablas hijas:
+
+- `equipo_componentes` → piezas del inventario instaladas
+- `equipo_software` → aplicaciones/licencias
+- `equipo_reparaciones` → historial (opcionalmente ligado a una incidencia)
+- incidencias y usuario asignado (ya existentes)
+
+Usar un repuesto en un ticket actualiza stock, asocia la pieza al equipo y deja constancia en reparaciones.
 
 ## Empaquetado instalable
 
