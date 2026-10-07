@@ -1,0 +1,8 @@
+{
+  "host": "smtp.ejemplo.com",
+  "port": 587,
+  "user": "usuario@ejemplo.com",
+  "password": "TU_CLAVE",
+  "from": "asist1d0@ejemplo.com",
+  "use_tls": true
+}

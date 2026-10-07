@@ -82,6 +82,7 @@ class Application:
             self._tray.change_password_requested.connect(self._password_from_tray)
             self._tray.logout_requested.connect(self._logout_from_tray)
             self._tray.help_requested.connect(self._help_from_tray)
+            self._tray.portal_requested.connect(self._portal_from_tray)
             self._tray.about_requested.connect(self._about_from_tray)
             self._tray.quit_requested.connect(self._quit_app)
 
@@ -130,8 +131,15 @@ class Application:
         if self._main is not None:
             self._main.show_about()
 
+    def _portal_from_tray(self) -> None:
+        if self._main is not None:
+            self._main.open_portal()
+
     def _quit_app(self) -> None:
         """Salida completa pedida desde la bandeja (opción «Salir»)."""
+        from app.portal_launcher import stop_portal_if_owned
+
+        stop_portal_if_owned()
         self._hide_tray()
         if self._main is not None:
             self._main.set_tray_enabled(False)

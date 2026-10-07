@@ -93,7 +93,7 @@ Las cuentas demo están en un ámbito aislado: **no pueden ver equipos, incidenc
 
 | Rol | Capacidades principales |
 |-----|-------------------------|
-| **Usuario** | Sus equipos e incidencias; dashboard básico |
+| **Usuario** | Sus equipos (alta/edición), incidencias (crear, comentar, adjuntos, editar descripción), dashboard |
 | **Técnico** | Incidencias (estado, asignación, intervenciones, repuestos), inventario, informes y panel técnico |
 | **Administrador** | Todo lo del técnico + gestión de usuarios |
 
@@ -122,9 +122,9 @@ La bandeja muestra avisos breves cuando te asignan una incidencia, cambia su est
 
 ### Módulos
 
-- **Dashboard** — KPIs y accesos rápidos (clic en elementos para abrir incidencias)
-- **Incidencias** — búsqueda/filtros (técnicos: «Mis asignadas», «Sin asignar», por técnico), hilo de **comentarios**, historial, intervenciones, repuestos, asignar/desasignar
-- **Equipos** — alta/edición y árbol usuario → equipo → incidencias
+- **Dashboard** — KPIs y accesos rápidos; CTAs si no hay equipo/incidencias
+- **Incidencias** — categorías/plantillas, SLA + badge Vencida, confirmar/reabrir (Usuario), filtros (incl. categoría), comentarios, adjuntos, editar descripción; técnicos: cola, intervenciones, repuestos
+- **Equipos** — alta/edición (Usuario: solo los suyos); doble clic en un ticket del árbol abre Incidencias
 - **Usuarios** — CRUD (admin); lectura para técnico; botón **Mi contraseña** (admin, mismo flujo que Sesión)
 - **Inventario** — componentes/repuestos y control de stock
 - **Informes** — estadísticas por estado/prioridad/técnico y exportación CSV
@@ -134,24 +134,43 @@ La bandeja muestra avisos breves cuando te asignan una incidencia, cambia su est
 
 ```text
 Asist1d0/
-├── run_app.py              # Lanzador (venv + dependencias + arranque)
+├── run_app.py              # Escritorio (venv + dependencias + arranque)
+├── run_api.py              # API REST + portal web
 ├── requirements.txt
-├── README.md
-├── assets/                 # Logo: logo.png / logo.svg / logo.ico
-├── data/                   # SQLite y preferencias (runtime)
-├── logs/                   # Logs de la aplicación
-└── app/
-    ├── main.py             # Ciclo login ↔ ventana principal ↔ bandeja
-    ├── bootstrap.py        # Contexto de servicios y repositorios
-    ├── config.py           # Nombre, versión, rutas, URL del repo
-    ├── prefs.py            # Preferencias locales (p. ej. recordar email)
-    ├── models/             # Dominio POO
-    ├── database/           # SQLite, schema, migraciones, repositorios, seed
-    ├── services/           # Casos de uso y notificadores
-    ├── auth/               # Login, hash PBKDF2, sesión/roles
-    └── ui/                 # PySide6 (vistas, diálogos, estilos, bandeja)
+├── portal/                 # Frontend ligero del portal
+├── api/                    # FastAPI
+├── assets/
+├── data/                   # SQLite, prefs, smtp.json, adjuntos
+├── logs/
+└── app/                    # Dominio, SQLite, servicios, UI PySide6
 ```
 
-## Fase 2 (no incluida)
+## API REST y portal web
 
-API REST con FastAPI, email SMTP real y empaquetado instalable.
+Misma base SQLite que el escritorio.
+
+**Desde el escritorio:** menú **Ayuda → Abrir portal web…** (también en la bandeja). Si la API no está en marcha, la arranca sola y abre el navegador.
+
+**Manual:**
+
+```bash
+source .venv/bin/activate
+pip install -r requirements.txt   # si aún no tienes FastAPI
+python run_api.py
+```
+
+Portal: http://127.0.0.1:8765/portal/ (login demo: `juan@asist1d0.local` / `juan123`).
+
+Endpoints útiles bajo `/api/` (Bearer JWT tras `POST /api/auth/login`): incidencias, comentarios, confirmar, reabrir, equipos.
+
+## Email SMTP
+
+Copia [`data/smtp.json.example`](data/smtp.json.example) a `data/smtp.json` y rellena host/usuario/clave. Si no hay config válida, los avisos se escriben en `logs/email_outbox.log`.
+
+## SLA
+
+Plazo desde la creación: Baja 7 días, Media 3, Alta 1, Crítica 24 h. Los tickets abiertos fuera de plazo muestran **Vencida**.
+
+## Empaquetado instalable
+
+No incluido (pendiente).

@@ -89,6 +89,34 @@ class MainWindow(QMainWindow):
         self.bring_to_front()
         self._show_about()
 
+    def open_portal(self) -> None:
+        """Arranca la API si hace falta y abre el portal en el navegador."""
+        from PySide6.QtGui import QCursor
+        from PySide6.QtWidgets import QApplication, QMessageBox
+
+        from app.portal_launcher import is_portal_up, open_portal
+
+        try:
+            if not is_portal_up():
+                QApplication.setOverrideCursor(QCursor(Qt.CursorShape.WaitCursor))
+            try:
+                url = open_portal()
+            finally:
+                QApplication.restoreOverrideCursor()
+            QMessageBox.information(
+                self,
+                "Portal web",
+                f"Portal disponible en:\n{url}\n\n"
+                "Usa la misma cuenta que en el escritorio.",
+            )
+        except Exception as exc:
+            QApplication.restoreOverrideCursor()
+            QMessageBox.warning(
+                self,
+                "Portal web",
+                f"No se pudo abrir el portal:\n{exc}",
+            )
+
     def request_logout(self) -> None:
         self._logout()
 
@@ -137,6 +165,9 @@ class MainWindow(QMainWindow):
         act_help.setShortcut(QKeySequence.StandardKey.HelpContents)
         act_help.triggered.connect(self._show_help)
         menu_ayuda.addAction(act_help)
+        act_portal = QAction("Abrir portal web…", self)
+        act_portal.triggered.connect(self.open_portal)
+        menu_ayuda.addAction(act_portal)
         act_about = QAction(f"Acerca de {APP_NAME}…", self)
         act_about.triggered.connect(self._show_about)
         menu_ayuda.addAction(act_about)
@@ -199,13 +230,13 @@ class MainWindow(QMainWindow):
             defs: list[tuple[str, Callable[[], QWidget]]] = [
                 ("Dashboard", self._make_dashboard),
                 ("Incidencias", lambda: IncidenciasView(self._ctx, self._session)),
-                ("Equipos", lambda: EquiposView(self._ctx, self._session)),
+                ("Equipos", self._make_equipos),
             ]
         else:
             defs = [
                 ("Dashboard", self._make_dashboard),
                 ("Incidencias", lambda: IncidenciasView(self._ctx, self._session)),
-                ("Equipos", lambda: EquiposView(self._ctx, self._session)),
+                ("Equipos", self._make_equipos),
                 ("Usuarios", lambda: UsuariosView(self._ctx, self._session)),
                 ("Inventario", lambda: InventarioView(self._ctx, self._session)),
                 ("Informes", lambda: InformesView(self._ctx, self._session)),
@@ -243,7 +274,14 @@ class MainWindow(QMainWindow):
     def _make_dashboard(self) -> DashboardView:
         dash = DashboardView(self._ctx, self._session)
         dash.abrir_incidencia.connect(self.abrir_incidencia)
+        dash.solicitar_nueva_incidencia.connect(self.abrir_nueva_incidencia)
+        dash.solicitar_nuevo_equipo.connect(self.abrir_equipos)
         return dash
+
+    def _make_equipos(self) -> EquiposView:
+        view = EquiposView(self._ctx, self._session)
+        view.abrir_incidencia.connect(self.abrir_incidencia)
+        return view
 
     def _page_index(self, name: str) -> int | None:
         try:
@@ -259,6 +297,25 @@ class MainWindow(QMainWindow):
         widget = self._stack.widget(idx)
         if isinstance(widget, IncidenciasView):
             widget.seleccionar_incidencia(incidencia_id)
+        if 0 <= idx < len(self._nav_buttons):
+            self._nav_buttons[idx].setChecked(True)
+
+    def abrir_nueva_incidencia(self) -> None:
+        idx = self._page_index("Incidencias")
+        if idx is None:
+            return
+        self._goto(idx)
+        widget = self._stack.widget(idx)
+        if isinstance(widget, IncidenciasView):
+            widget.nueva_incidencia()
+        if 0 <= idx < len(self._nav_buttons):
+            self._nav_buttons[idx].setChecked(True)
+
+    def abrir_equipos(self) -> None:
+        idx = self._page_index("Equipos")
+        if idx is None:
+            return
+        self._goto(idx)
         if 0 <= idx < len(self._nav_buttons):
             self._nav_buttons[idx].setChecked(True)
 

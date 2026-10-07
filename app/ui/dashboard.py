@@ -52,6 +52,8 @@ class DashboardView(QWidget):
     """Página de resumen; emite ``abrir_incidencia`` al pulsar un ítem."""
 
     abrir_incidencia = Signal(int)
+    solicitar_nueva_incidencia = Signal()
+    solicitar_nuevo_equipo = Signal()
 
     def __init__(self, ctx: AppContext, session: SessionContext, parent=None) -> None:
         super().__init__(parent)
@@ -119,11 +121,26 @@ class DashboardView(QWidget):
             layout.addWidget(self.lista_propias)
             self.empty_propias = EmptyState(
                 "No tienes incidencias todavía.",
+                "+ Nueva incidencia",
+                self._cta_nueva_incidencia,
             )
             layout.addWidget(self.empty_propias)
             self.empty_propias.hide()
+            self.empty_sin_equipo = EmptyState(
+                "Registra primero un equipo para poder abrir incidencias.",
+                "+ Nuevo equipo",
+                self._cta_nuevo_equipo,
+            )
+            layout.addWidget(self.empty_sin_equipo)
+            self.empty_sin_equipo.hide()
 
         layout.addStretch()
+
+    def _cta_nueva_incidencia(self) -> None:
+        self.solicitar_nueva_incidencia.emit()
+
+    def _cta_nuevo_equipo(self) -> None:
+        self.solicitar_nuevo_equipo.emit()
 
     def _on_propia_clicked(self, item: QListWidgetItem) -> None:
         inc_id = item.data(Qt.ItemDataRole.UserRole)
@@ -170,8 +187,11 @@ class DashboardView(QWidget):
                 item = QListWidgetItem(str(inc))
                 item.setData(Qt.ItemDataRole.UserRole, inc.id)
                 self.lista_propias.addItem(item)
-            self.lista_propias.setVisible(bool(incs))
-            self.empty_propias.setVisible(not incs)
+            tiene_incs = bool(incs)
+            sin_equipo = equipos == 0
+            self.lista_propias.setVisible(tiene_incs)
+            self.empty_propias.setVisible(not tiene_incs and not sin_equipo)
+            self.empty_sin_equipo.setVisible(not tiene_incs and sin_equipo)
 
     def _on_interv_clicked(self, item: QListWidgetItem) -> None:
         inc_id = item.data(Qt.ItemDataRole.UserRole)

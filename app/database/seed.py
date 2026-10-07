@@ -16,7 +16,7 @@ from app.database.repositories import (
     UsuarioRepository,
 )
 from app.models.componente import Componente
-from app.models.enums import EstadoIncidencia, Prioridad, Rol
+from app.models.enums import CategoriaIncidencia, EstadoIncidencia, Prioridad, Rol
 from app.models.equipo import Equipo
 from app.models.incidencia import Incidencia, Intervencion
 from app.models.usuario import Usuario
@@ -116,6 +116,7 @@ def seed_database(db: DatabaseConnection) -> None:
         _tecnico_id=tecnico.id,
         _titulo="No funciona el Wi-Fi",
         _descripcion="El equipo no detecta ninguna red Wi-Fi.",
+        _categoria=CategoriaIncidencia.RED,
         _estado=EstadoIncidencia.EN_REPARACION,
         _prioridad=Prioridad.ALTA,
     )
@@ -144,6 +145,7 @@ def seed_database(db: DatabaseConnection) -> None:
             _tecnico_id=tecnico.id,
             _titulo="Disco lleno",
             _descripcion="El disco raíz está al 98% de uso.",
+            _categoria=CategoriaIncidencia.HARDWARE,
             _estado=EstadoIncidencia.PENDIENTE,
             _prioridad=Prioridad.MEDIA,
         )
@@ -156,6 +158,7 @@ def seed_database(db: DatabaseConnection) -> None:
             _equipo_id=eq1.id,
             _titulo="Problemas de sonido",
             _descripcion="No hay salida de audio por altavoces ni auriculares.",
+            _categoria=CategoriaIncidencia.HARDWARE,
             _estado=EstadoIncidencia.ABIERTA,
             _prioridad=Prioridad.BAJA,
         )
@@ -169,6 +172,7 @@ def seed_database(db: DatabaseConnection) -> None:
             _tecnico_id=tecnico.id,
             _titulo="Impresora configurada",
             _descripcion="Se configuró la impresora de red correctamente.",
+            _categoria=CategoriaIncidencia.IMPRESORA,
             _estado=EstadoIncidencia.CERRADA,
             _prioridad=Prioridad.BAJA,
         )

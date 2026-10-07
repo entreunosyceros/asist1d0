@@ -2,12 +2,12 @@
 Vista de equipos informáticos.
 
 Árbol usuario → equipo → incidencias, con alta/edición según el rol
-(el usuario final solo gestiona sus propios equipos).
+(el usuario final gestiona sus propios equipos).
 """
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -89,6 +89,8 @@ class EquipoDialog(QDialog):
 class EquiposView(QWidget):
     """Página de equipos con árbol jerárquico e incidencias hijas."""
 
+    abrir_incidencia = Signal(int)
+
     def __init__(self, ctx: AppContext, session: SessionContext, parent=None) -> None:
         super().__init__(parent)
         self._ctx = ctx
@@ -97,25 +99,29 @@ class EquiposView(QWidget):
         self._build()
         self.refresh()
 
+    def _puede_editar(self) -> bool:
+        return self._session.es_tecnico() or self._session.rol == Rol.USUARIO
+
     def _build(self) -> None:
         layout = QVBoxLayout(self)
         apply_page_margins(layout)
         actions = []
-        if self._session.es_tecnico() or self._session.rol == Rol.USUARIO:
+        if self._puede_editar():
             btn = QPushButton("+ Nuevo equipo")
             btn.clicked.connect(self._nuevo)
             actions.append(btn)
-            if self._session.es_admin() or self._session.es_tecnico():
-                btn_edit = QPushButton("Editar")
-                btn_edit.setObjectName("SecondaryButton")
-                btn_edit.clicked.connect(self._editar)
+            btn_edit = QPushButton("Editar")
+            btn_edit.setObjectName("SecondaryButton")
+            btn_edit.clicked.connect(self._editar)
+            actions.append(btn_edit)
+            if self._session.es_tecnico():
                 btn_del = QPushButton("Eliminar")
                 btn_del.setObjectName("DangerButton")
                 btn_del.clicked.connect(self._eliminar)
-                actions.extend([btn_edit, btn_del])
+                actions.append(btn_del)
         header, self._status = build_page_header(
             "Equipos",
-            "Inventario de hardware por usuario",
+            "Inventario de hardware por usuario · doble clic en un ticket para abrirlo",
             actions=actions or None,
         )
         layout.addLayout(header)
@@ -123,11 +129,12 @@ class EquiposView(QWidget):
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels(["Elemento", "Detalle"])
         self.tree.setAlternatingRowColors(True)
+        self.tree.itemDoubleClicked.connect(self._on_item_double_clicked)
         layout.addWidget(self.tree)
         self.empty = EmptyState(
-            "No hay equipos registrados.",
+            "No hay equipos registrados. Añade el tuyo para poder abrir incidencias.",
             "+ Nuevo equipo",
-            self._nuevo if (self._session.es_tecnico() or self._session.rol == Rol.USUARIO) else None,
+            self._nuevo if self._puede_editar() else None,
         )
         layout.addWidget(self.empty)
         self.empty.hide()
@@ -139,7 +146,6 @@ class EquiposView(QWidget):
             usuario_id=uid, es_demo=self._session.es_demo
         )
 
-        # Agrupar por usuario
         por_usuario: dict[str, list] = {}
         for eq in equipos:
             key = eq.usuario_nombre or f"Usuario #{eq.usuario_id}"
@@ -155,25 +161,51 @@ class EquiposView(QWidget):
                         f"S/N {eq.numero_serie} · {eq.sistema_operativo}",
                     ]
                 )
-                eq_item.setData(0, Qt.ItemDataRole.UserRole, eq.id)
+                eq_item.setData(0, Qt.ItemDataRole.UserRole, ("equipo", eq.id))
                 user_item.addChild(eq_item)
                 for inc in self._ctx.incidencias.listar(
                     equipo_id=eq.id, es_demo=self._session.es_demo
                 ):
                     inc_item = QTreeWidgetItem(
-                        [f"🎫 {inc.codigo} {inc.prioridad.icono} {inc.titulo}", inc.estado.value]
+                        [
+                            f"🎫 {inc.codigo} {inc.prioridad.icono} {inc.titulo}",
+                            inc.estado.etiqueta_usuario
+                            if self._session.rol == Rol.USUARIO
+                            else inc.estado.value,
+                        ]
                     )
+                    inc_item.setData(0, Qt.ItemDataRole.UserRole, ("incidencia", inc.id))
                     eq_item.addChild(inc_item)
             user_item.setExpanded(True)
         self.tree.resizeColumnToContents(0)
         self.tree.setVisible(bool(equipos))
         self.empty.setVisible(not equipos)
 
+    def _on_item_double_clicked(self, item: QTreeWidgetItem, _column: int) -> None:
+        data = item.data(0, Qt.ItemDataRole.UserRole)
+        if not data or not isinstance(data, tuple) or len(data) != 2:
+            return
+        tipo, valor = data
+        if tipo == "incidencia" and valor:
+            self.abrir_incidencia.emit(int(valor))
+
     def _equipo_seleccionado(self):
         item = self.tree.currentItem()
         if not item:
             return None
-        eq_id = item.data(0, Qt.ItemDataRole.UserRole)
+        data = item.data(0, Qt.ItemDataRole.UserRole)
+        eq_id = None
+        if isinstance(data, tuple) and data and data[0] == "equipo":
+            eq_id = data[1]
+        elif isinstance(data, int):
+            eq_id = data
+        if not eq_id:
+            # Si está seleccionado un ticket, subir al equipo padre
+            parent = item.parent()
+            if parent:
+                pdata = parent.data(0, Qt.ItemDataRole.UserRole)
+                if isinstance(pdata, tuple) and pdata[0] == "equipo":
+                    eq_id = pdata[1]
         if not eq_id:
             return None
         return self._ctx.equipos.obtener(eq_id)
@@ -195,23 +227,34 @@ class EquiposView(QWidget):
         if not eq:
             show_toast(self._status, "Selecciona un equipo.", error=True)
             return
+        if self._session.rol == Rol.USUARIO and eq.usuario_id != self._session.usuario_id:
+            show_toast(self._status, "Solo puedes editar tus propios equipos.", error=True)
+            return
         dlg = EquipoDialog(self._ctx, self._session, equipo=eq, parent=self)
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
         data = dlg.datos()
+        if self._session.rol == Rol.USUARIO:
+            data["usuario_id"] = self._session.usuario_id
         eq.usuario_id = data["usuario_id"]
         eq.numero_serie = data["numero_serie"]
         eq.marca = data["marca"]
         eq.modelo = data["modelo"]
         eq.sistema_operativo = data["sistema_operativo"]
         try:
-            self._ctx.equipos.actualizar(eq)
+            self._ctx.equipos.actualizar(
+                eq,
+                actor_id=self._session.usuario_id,
+                rol=self._session.rol,
+            )
             self.refresh()
             show_toast(self._status, "Equipo actualizado.")
         except Exception as exc:
             show_toast(self._status, str(exc), error=True)
 
     def _eliminar(self) -> None:
+        if not self._session.es_tecnico():
+            return
         eq = self._equipo_seleccionado()
         if not eq:
             return

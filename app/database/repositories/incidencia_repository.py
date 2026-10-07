@@ -10,12 +10,14 @@ from __future__ import annotations
 from typing import Optional
 
 from app.database.connection import DatabaseConnection
-from app.models.enums import EstadoIncidencia, Prioridad
+from app.models.enums import CategoriaIncidencia, EstadoIncidencia, Prioridad
 from app.models.incidencia import (
+    Adjunto,
     Comentario,
     HistorialEntrada,
     Incidencia,
     Intervencion,
+    adjunto_desde_fila,
     comentario_desde_fila,
     historial_desde_fila,
     incidencia_desde_fila,
@@ -35,6 +37,7 @@ class IncidenciaRepository:
                    (e.marca || ' ' || e.modelo) AS equipo_nombre,
                    e.usuario_id AS usuario_id,
                    u.nombre AS usuario_nombre,
+                   u.email AS usuario_email,
                    t.nombre AS tecnico_nombre
             FROM incidencias i
             JOIN equipos e ON e.id = i.equipo_id
@@ -46,14 +49,15 @@ class IncidenciaRepository:
         return self._db.execute(
             """
             INSERT INTO incidencias
-                (equipo_id, tecnico_id, titulo, descripcion, estado, prioridad)
-            VALUES (?, ?, ?, ?, ?, ?)
+                (equipo_id, tecnico_id, titulo, descripcion, categoria, estado, prioridad)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 incidencia.equipo_id,
                 incidencia.tecnico_id,
                 incidencia.titulo,
                 incidencia.descripcion,
+                incidencia.categoria.value,
                 incidencia.estado.value,
                 incidencia.prioridad.value,
             ),
@@ -66,7 +70,7 @@ class IncidenciaRepository:
                 """
                 UPDATE incidencias
                 SET equipo_id = ?, tecnico_id = ?, titulo = ?, descripcion = ?,
-                    estado = ?, prioridad = ?,
+                    categoria = ?, estado = ?, prioridad = ?,
                     fecha_cierre = COALESCE(fecha_cierre, datetime('now', 'localtime'))
                 WHERE id = ?
                 """,
@@ -75,6 +79,7 @@ class IncidenciaRepository:
                     incidencia.tecnico_id,
                     incidencia.titulo,
                     incidencia.descripcion,
+                    incidencia.categoria.value,
                     incidencia.estado.value,
                     incidencia.prioridad.value,
                     incidencia.id,
@@ -85,7 +90,7 @@ class IncidenciaRepository:
                 """
                 UPDATE incidencias
                 SET equipo_id = ?, tecnico_id = ?, titulo = ?, descripcion = ?,
-                    estado = ?, prioridad = ?, fecha_cierre = NULL
+                    categoria = ?, estado = ?, prioridad = ?, fecha_cierre = NULL
                 WHERE id = ?
                 """,
                 (
@@ -93,6 +98,7 @@ class IncidenciaRepository:
                     incidencia.tecnico_id,
                     incidencia.titulo,
                     incidencia.descripcion,
+                    incidencia.categoria.value,
                     incidencia.estado.value,
                     incidencia.prioridad.value,
                     incidencia.id,
@@ -121,6 +127,7 @@ class IncidenciaRepository:
             inc._intervenciones = self.listar_intervenciones(incidencia_id)
             inc._historial = self.listar_historial(incidencia_id)
             inc._comentarios = self.listar_comentarios(incidencia_id)
+            inc._adjuntos = self.listar_adjuntos(incidencia_id)
         return inc
 
     def listar(
@@ -131,6 +138,7 @@ class IncidenciaRepository:
         equipo_id: Optional[int] = None,
         estado: Optional[EstadoIncidencia] = None,
         prioridad: Optional[Prioridad] = None,
+        categoria: Optional[CategoriaIncidencia] = None,
         solo_abiertas: bool = False,
         es_demo: Optional[bool] = None,
         texto: Optional[str] = None,
@@ -146,6 +154,9 @@ class IncidenciaRepository:
         elif tecnico_id is not None:
             sql += " AND i.tecnico_id = ?"
             params.append(tecnico_id)
+        if categoria is not None:
+            sql += " AND i.categoria = ?"
+            params.append(categoria.value)
         if equipo_id is not None:
             sql += " AND i.equipo_id = ?"
             params.append(equipo_id)
@@ -299,6 +310,51 @@ class IncidenciaRepository:
             (incidencia_id,),
         )
         return [comentario_desde_fila(r) for r in rows]
+
+    def crear_adjunto(self, adjunto: Adjunto) -> int:
+        return self._db.execute(
+            """
+            INSERT INTO adjuntos
+                (incidencia_id, usuario_id, nombre_original, nombre_archivo, tamano)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                adjunto.incidencia_id,
+                adjunto.usuario_id,
+                adjunto.nombre_original,
+                adjunto.nombre_archivo,
+                adjunto.tamano,
+            ),
+            lastrowid=True,
+        )
+
+    def listar_adjuntos(self, incidencia_id: int) -> list[Adjunto]:
+        rows = self._db.fetchall(
+            """
+            SELECT a.*, u.nombre AS usuario_nombre
+            FROM adjuntos a
+            JOIN usuarios u ON u.id = a.usuario_id
+            WHERE a.incidencia_id = ?
+            ORDER BY a.fecha ASC
+            """,
+            (incidencia_id,),
+        )
+        return [adjunto_desde_fila(r) for r in rows]
+
+    def obtener_adjunto(self, adjunto_id: int) -> Optional[Adjunto]:
+        row = self._db.fetchone(
+            """
+            SELECT a.*, u.nombre AS usuario_nombre
+            FROM adjuntos a
+            JOIN usuarios u ON u.id = a.usuario_id
+            WHERE a.id = ?
+            """,
+            (adjunto_id,),
+        )
+        return adjunto_desde_fila(row) if row else None
+
+    def eliminar_adjunto(self, adjunto_id: int) -> None:
+        self._db.execute("DELETE FROM adjuntos WHERE id = ?", (adjunto_id,))
 
     def listar_historial(self, incidencia_id: int) -> list[HistorialEntrada]:
         rows = self._db.fetchall(

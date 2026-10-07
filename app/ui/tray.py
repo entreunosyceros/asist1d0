@@ -24,6 +24,7 @@ class AppTray(QObject):
     change_password_requested = Signal()
     logout_requested = Signal()
     help_requested = Signal()
+    portal_requested = Signal()
     about_requested = Signal()
     quit_requested = Signal()
 
@@ -78,6 +79,10 @@ class AppTray(QObject):
         act_help = QAction("Guía de uso…", self._menu)
         act_help.triggered.connect(self.help_requested.emit)
         self._menu.addAction(act_help)
+
+        act_portal = QAction("Abrir portal web…", self._menu)
+        act_portal.triggered.connect(self.portal_requested.emit)
+        self._menu.addAction(act_portal)
 
         act_about = QAction(f"Acerca de {APP_NAME}…", self._menu)
         act_about.triggered.connect(self.about_requested.emit)

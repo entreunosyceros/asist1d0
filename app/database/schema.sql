@@ -30,6 +30,8 @@ CREATE TABLE IF NOT EXISTS incidencias (
     tecnico_id INTEGER,
     titulo TEXT NOT NULL,
     descripcion TEXT,
+    categoria TEXT NOT NULL DEFAULT 'Otro'
+        CHECK (categoria IN ('Red', 'Hardware', 'Software', 'Impresora', 'Cuenta', 'Otro')),
     estado TEXT NOT NULL DEFAULT 'Abierta'
         CHECK (estado IN ('Abierta', 'En reparación', 'Pendiente', 'Cerrada')),
     prioridad TEXT NOT NULL DEFAULT 'Media'
@@ -89,6 +91,18 @@ CREATE TABLE IF NOT EXISTS comentarios (
     FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS adjuntos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    incidencia_id INTEGER NOT NULL,
+    usuario_id INTEGER NOT NULL,
+    nombre_original TEXT NOT NULL,
+    nombre_archivo TEXT NOT NULL,
+    tamano INTEGER NOT NULL DEFAULT 0 CHECK (tamano >= 0),
+    fecha TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    FOREIGN KEY (incidencia_id) REFERENCES incidencias(id) ON DELETE CASCADE,
+    FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_usuarios_email ON usuarios(email);
 CREATE INDEX IF NOT EXISTS idx_usuarios_rol ON usuarios(rol);
 CREATE INDEX IF NOT EXISTS idx_equipos_usuario ON equipos(usuario_id);
@@ -100,3 +114,4 @@ CREATE INDEX IF NOT EXISTS idx_incidencias_tecnico ON incidencias(tecnico_id);
 CREATE INDEX IF NOT EXISTS idx_intervenciones_incidencia ON intervenciones(incidencia_id);
 CREATE INDEX IF NOT EXISTS idx_historial_incidencia ON historial(incidencia_id);
 CREATE INDEX IF NOT EXISTS idx_comentarios_incidencia ON comentarios(incidencia_id);
+CREATE INDEX IF NOT EXISTS idx_adjuntos_incidencia ON adjuntos(incidencia_id);

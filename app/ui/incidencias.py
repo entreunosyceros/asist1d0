@@ -8,12 +8,14 @@ crea/consulta las suyas.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QBrush, QColor, QDesktopServices
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QFileDialog,
     QFormLayout,
     QFrame,
     QGridLayout,
@@ -22,6 +24,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QListWidget,
+    QListWidgetItem,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -37,7 +40,7 @@ from PySide6.QtWidgets import (
 
 from app.auth.service import SessionContext
 from app.bootstrap import AppContext
-from app.models.enums import EstadoIncidencia, Prioridad, Rol
+from app.models.enums import CategoriaIncidencia, EstadoIncidencia, Prioridad, Rol
 from app.ui.page_chrome import (
     EmptyState,
     apply_page_margins,
@@ -68,6 +71,11 @@ class NuevaIncidenciaDialog(QDialog):
         for eq in equipos:
             self.equipo.addItem(f"{eq.nombre_completo} ({eq.numero_serie})", eq.id)
 
+        self.categoria = QComboBox()
+        for c in CategoriaIncidencia:
+            self.categoria.addItem(c.value, c.value)
+        self.categoria.currentIndexChanged.connect(self._aplicar_plantilla)
+
         self.titulo = QLineEdit()
         self.descripcion = QTextEdit()
         self.descripcion.setMaximumHeight(100)
@@ -76,6 +84,7 @@ class NuevaIncidenciaDialog(QDialog):
             self.prioridad.addItem(f"{p.icono} {p.value}", p.value)
 
         layout.addRow("Equipo", self.equipo)
+        layout.addRow("Categoría", self.categoria)
         layout.addRow("Título", self.titulo)
         layout.addRow("Descripción", self.descripcion)
         layout.addRow("Prioridad", self.prioridad)
@@ -86,6 +95,21 @@ class NuevaIncidenciaDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addRow(buttons)
+        self._aplicar_plantilla()
+
+    def _aplicar_plantilla(self) -> None:
+        cat = CategoriaIncidencia(self.categoria.currentData())
+        titulo, desc = cat.plantilla
+        # Solo rellena si el usuario no ha escrito aún o coincide con otra plantilla.
+        actuales = {t for t, _ in (c.plantilla for c in CategoriaIncidencia)}
+        if not self.titulo.text().strip() or self.titulo.text().strip() in actuales:
+            self.titulo.setText(titulo)
+        descs = {d for _, d in (c.plantilla for c in CategoriaIncidencia)}
+        if (
+            not self.descripcion.toPlainText().strip()
+            or self.descripcion.toPlainText().strip() in descs
+        ):
+            self.descripcion.setPlainText(desc)
 
     def datos(self):
         return {
@@ -93,6 +117,7 @@ class NuevaIncidenciaDialog(QDialog):
             "titulo": self.titulo.text().strip(),
             "descripcion": self.descripcion.toPlainText().strip(),
             "prioridad": Prioridad(self.prioridad.currentData()),
+            "categoria": CategoriaIncidencia(self.categoria.currentData()),
         }
 
 
@@ -243,6 +268,12 @@ class IncidenciasView(QWidget):
             self.filtro_prioridad.addItem(f"{p.icono} {p.value}", p.value)
         self.filtro_prioridad.currentIndexChanged.connect(self.refresh)
 
+        self.filtro_categoria = QComboBox()
+        self.filtro_categoria.addItem("Categoría: todas", "")
+        for c in CategoriaIncidencia:
+            self.filtro_categoria.addItem(c.value, c.value)
+        self.filtro_categoria.currentIndexChanged.connect(self.refresh)
+
         self.chk_mias = QCheckBox("Mis asignadas")
         self.chk_mias.toggled.connect(self._on_mias_toggled)
         self.chk_sin_asignar = QCheckBox("Sin asignar")
@@ -261,6 +292,7 @@ class IncidenciasView(QWidget):
         filters.addWidget(self.busqueda, 2)
         filters.addWidget(self.filtro_estado)
         filters.addWidget(self.filtro_prioridad)
+        filters.addWidget(self.filtro_categoria)
         filters.addWidget(self.chk_mias)
         filters.addWidget(self.chk_sin_asignar)
         filters.addWidget(self.filtro_tecnico)
@@ -271,9 +303,9 @@ class IncidenciasView(QWidget):
         left = QWidget()
         left_lay = QVBoxLayout(left)
         left_lay.setContentsMargins(0, 0, 0, 0)
-        self.tabla = QTableWidget(0, 5)
+        self.tabla = QTableWidget(0, 6)
         self.tabla.setHorizontalHeaderLabels(
-            ["Código", "Título", "Prioridad", "Estado", "Equipo"]
+            ["Código", "Título", "Categoría", "Prioridad", "Estado", "Equipo"]
         )
         self.tabla.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.tabla.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
@@ -284,7 +316,7 @@ class IncidenciasView(QWidget):
         self.lista_stack = QStackedWidget()
         self.lista_stack.addWidget(self.tabla)
         self.empty = EmptyState(
-            "No hay incidencias con estos filtros.",
+            "No hay incidencias. Si aún no tienes equipo, regístralo primero en Equipos.",
             "+ Nueva incidencia",
             self._nueva,
         )
@@ -320,6 +352,45 @@ class IncidenciasView(QWidget):
         self.detalle_desc.setWordWrap(True)
         self.detalle_desc.setObjectName("MetaValue")
         dlay.addWidget(self.detalle_desc)
+        self.btn_editar_desc = QPushButton("Editar descripción…")
+        self.btn_editar_desc.setObjectName("SecondaryButton")
+        self.btn_editar_desc.clicked.connect(self._editar_descripcion)
+        dlay.addWidget(self.btn_editar_desc)
+
+        self.user_actions = QWidget()
+        ua = QHBoxLayout(self.user_actions)
+        ua.setContentsMargins(0, 0, 0, 0)
+        self.btn_confirmar = QPushButton("Confirmar resolución")
+        self.btn_confirmar.clicked.connect(self._confirmar_resolucion)
+        self.btn_reabrir = QPushButton("Reabrir incidencia")
+        self.btn_reabrir.setObjectName("SecondaryButton")
+        self.btn_reabrir.clicked.connect(self._reabrir)
+        ua.addWidget(self.btn_confirmar)
+        ua.addWidget(self.btn_reabrir)
+        dlay.addWidget(self.user_actions)
+        if self._session.rol != Rol.USUARIO:
+            self.user_actions.hide()
+
+        dlay.addWidget(QLabel("Adjuntos"))
+        self.lista_adjuntos = QListWidget()
+        self.lista_adjuntos.setObjectName("DetailList")
+        self.lista_adjuntos.setMinimumHeight(70)
+        self.lista_adjuntos.itemDoubleClicked.connect(self._abrir_adjunto)
+        dlay.addWidget(self.lista_adjuntos)
+        adj_row = QHBoxLayout()
+        self.btn_adjuntar = QPushButton("+ Adjuntar archivo…")
+        self.btn_adjuntar.setObjectName("SecondaryButton")
+        self.btn_adjuntar.clicked.connect(self._adjuntar)
+        self.btn_abrir_adjunto = QPushButton("Abrir")
+        self.btn_abrir_adjunto.setObjectName("SecondaryButton")
+        self.btn_abrir_adjunto.clicked.connect(self._abrir_adjunto)
+        self.btn_eliminar_adjunto = QPushButton("Quitar")
+        self.btn_eliminar_adjunto.setObjectName("DangerButton")
+        self.btn_eliminar_adjunto.clicked.connect(self._eliminar_adjunto)
+        adj_row.addWidget(self.btn_adjuntar)
+        adj_row.addWidget(self.btn_abrir_adjunto)
+        adj_row.addWidget(self.btn_eliminar_adjunto)
+        dlay.addLayout(adj_row)
 
         dlay.addWidget(QLabel("Comentarios"))
         self.lista_comentarios = QListWidget()
@@ -355,6 +426,11 @@ class IncidenciasView(QWidget):
         self.lista_repuestos.setMinimumHeight(70)
         dlay.addWidget(self.lista_repuestos)
 
+        # Panel solo para técnico/admin (oculto al Usuario final).
+        self.tech_panel = QWidget()
+        tech_lay = QVBoxLayout(self.tech_panel)
+        tech_lay.setContentsMargins(0, 8, 0, 0)
+        tech_lay.setSpacing(8)
         actions = QGridLayout()
         self.cmb_estado = QComboBox()
         for e in EstadoIncidencia:
@@ -373,7 +449,7 @@ class IncidenciasView(QWidget):
         actions.addWidget(self.cmb_prioridad, 1, 1)
         actions.addWidget(QLabel("Técnico"), 2, 0)
         actions.addWidget(self.cmb_tecnico, 2, 1)
-        dlay.addLayout(actions)
+        tech_lay.addLayout(actions)
 
         row_btns = QHBoxLayout()
         self.btn_guardar = QPushButton("Guardar cambios")
@@ -387,7 +463,10 @@ class IncidenciasView(QWidget):
         row_btns.addWidget(self.btn_guardar)
         row_btns.addWidget(self.btn_interv)
         row_btns.addWidget(self.btn_repuesto)
-        dlay.addLayout(row_btns)
+        tech_lay.addLayout(row_btns)
+        dlay.addWidget(self.tech_panel)
+        if self._session.rol == Rol.USUARIO:
+            self.tech_panel.hide()
         dlay.addStretch()
 
         scroll.setWidget(detail)
@@ -399,7 +478,14 @@ class IncidenciasView(QWidget):
 
         self._set_actions_enabled(False)
 
-    def _set_actions_enabled(self, enabled: bool) -> None:
+    def _set_actions_enabled(
+        self,
+        enabled: bool,
+        *,
+        puede_editar_desc: bool = False,
+        puede_confirmar: bool = False,
+        puede_reabrir: bool = False,
+    ) -> None:
         tech = self._session.es_tecnico() and enabled
         self.btn_guardar.setEnabled(tech)
         self.btn_interv.setEnabled(tech)
@@ -409,6 +495,14 @@ class IncidenciasView(QWidget):
         self.cmb_tecnico.setEnabled(tech)
         self.btn_comentario.setEnabled(enabled)
         self.comentario_input.setEnabled(enabled)
+        self.btn_adjuntar.setEnabled(enabled)
+        self.btn_abrir_adjunto.setEnabled(enabled)
+        self.btn_eliminar_adjunto.setEnabled(enabled)
+        self.btn_editar_desc.setEnabled(puede_editar_desc)
+        self.btn_confirmar.setEnabled(puede_confirmar)
+        self.btn_confirmar.setVisible(puede_confirmar)
+        self.btn_reabrir.setEnabled(puede_reabrir)
+        self.btn_reabrir.setVisible(puede_reabrir)
 
     def _on_mias_toggled(self, checked: bool) -> None:
         if checked:
@@ -433,6 +527,9 @@ class IncidenciasView(QWidget):
         prio_val = self.filtro_prioridad.currentData()
         if prio_val:
             kwargs["prioridad"] = Prioridad(prio_val)
+        cat_val = self.filtro_categoria.currentData()
+        if cat_val:
+            kwargs["categoria"] = CategoriaIncidencia(cat_val)
         texto = self.busqueda.text().strip()
         if texto:
             kwargs["texto"] = texto
@@ -449,19 +546,27 @@ class IncidenciasView(QWidget):
         incidencias = self._ctx.incidencias.listar(**kwargs)
         self.tabla.setRowCount(0)
         select_row = -1
+        warn = QBrush(QColor("#fef2f2"))
         for inc in incidencias:
             row = self.tabla.rowCount()
             self.tabla.insertRow(row)
+            estado_col = (
+                f"{'⚠ Vencida · ' if inc.vencida else ''}"
+                f"{inc.estado.etiqueta_usuario if self._session.rol == Rol.USUARIO else inc.estado.value}"
+            )
             vals = [
                 inc.codigo,
                 f"{inc.prioridad.icono} {inc.titulo}",
+                inc.categoria.value,
                 inc.prioridad.value,
-                inc.estado.value,
+                estado_col,
                 inc.equipo_nombre or "",
             ]
             for col, text in enumerate(vals):
                 item = QTableWidgetItem(text)
                 item.setData(Qt.ItemDataRole.UserRole, inc.id)
+                if inc.vencida:
+                    item.setBackground(warn)
                 self.tabla.setItem(row, col, item)
             if keep_id and inc.id == keep_id:
                 select_row = row
@@ -483,6 +588,7 @@ class IncidenciasView(QWidget):
         self.busqueda.clear()
         self.filtro_estado.setCurrentIndex(0)
         self.filtro_prioridad.setCurrentIndex(0)
+        self.filtro_categoria.setCurrentIndex(0)
         self.chk_mias.setChecked(False)
         self.chk_sin_asignar.setChecked(False)
         self.filtro_tecnico.setCurrentIndex(0)
@@ -511,6 +617,7 @@ class IncidenciasView(QWidget):
             if item.widget():
                 item.widget().deleteLater()
         self.detalle_desc.setText("(sin selección)")
+        self.lista_adjuntos.clear()
         self.lista_comentarios.clear()
         self.comentario_input.clear()
         self.lista_intervenciones.clear()
@@ -524,22 +631,69 @@ class IncidenciasView(QWidget):
             self._limpiar_detalle()
             return
         self._current_id = inc_id
-        self._set_actions_enabled(True)
-        self.detalle_titulo.setText(f"{inc.codigo} — {inc.titulo}")
+        es_propia = inc.usuario_id == self._session.usuario_id
+        puede_desc = self._session.es_tecnico() or (
+            self._session.rol == Rol.USUARIO and es_propia and inc.esta_abierta()
+        )
+        puede_confirmar = (
+            self._session.rol == Rol.USUARIO
+            and es_propia
+            and inc.estado
+            in (EstadoIncidencia.PENDIENTE, EstadoIncidencia.EN_REPARACION)
+        )
+        puede_reabrir = (
+            self._session.rol == Rol.USUARIO
+            and es_propia
+            and inc.estado == EstadoIncidencia.CERRADA
+        )
+        self._set_actions_enabled(
+            True,
+            puede_editar_desc=puede_desc,
+            puede_confirmar=puede_confirmar,
+            puede_reabrir=puede_reabrir,
+        )
+        titulo = f"{inc.codigo} — {inc.titulo}"
+        if inc.vencida:
+            titulo += "  ·  ⚠ Vencida"
+        self.detalle_titulo.setText(titulo)
 
         while self.meta_grid.count():
             item = self.meta_grid.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
         fecha = (inc.fecha_creacion or "")[:16]
+        estado_txt = (
+            f"{inc.estado.etiqueta_usuario} ({inc.estado.value})"
+            if self._session.rol == Rol.USUARIO
+            else inc.estado.value
+        )
+        limite = inc.fecha_limite
+        sla_txt = (
+            f"{'⚠ Vencida · ' if inc.vencida else ''}"
+            f"límite {(limite.strftime('%Y-%m-%d %H:%M') if limite else '—')}"
+        )
         _meta_row(self.meta_grid, 0, "Usuario", inc.usuario_nombre or "—")
         _meta_row(self.meta_grid, 1, "Equipo", inc.equipo_nombre or "—")
-        _meta_row(self.meta_grid, 2, "Prioridad", inc.prioridad.value)
-        _meta_row(self.meta_grid, 3, "Estado", inc.estado.value)
-        _meta_row(self.meta_grid, 4, "Fecha", fecha or "—")
-        _meta_row(self.meta_grid, 5, "Técnico", inc.tecnico_nombre or "Sin asignar")
+        _meta_row(self.meta_grid, 2, "Categoría", inc.categoria.value)
+        _meta_row(self.meta_grid, 3, "Prioridad", inc.prioridad.value)
+        _meta_row(self.meta_grid, 4, "Estado", estado_txt)
+        _meta_row(self.meta_grid, 5, "SLA", sla_txt)
+        _meta_row(self.meta_grid, 6, "Fecha", fecha or "—")
+        _meta_row(self.meta_grid, 7, "Técnico", inc.tecnico_nombre or "Sin asignar")
 
         self.detalle_desc.setText(inc.descripcion or "(sin descripción)")
+
+        self.lista_adjuntos.clear()
+        if inc.adjuntos:
+            for a in inc.adjuntos:
+                kb = max(1, a.tamano // 1024) if a.tamano else 0
+                item = QListWidgetItem(
+                    f"{a.nombre_original} ({kb} KB) · {(a.fecha or '')[:16]}"
+                )
+                item.setData(Qt.ItemDataRole.UserRole, a.id)
+                self.lista_adjuntos.addItem(item)
+        else:
+            self.lista_adjuntos.addItem("(sin adjuntos)")
 
         self.lista_comentarios.clear()
         if inc.comentarios:
@@ -589,6 +743,160 @@ class IncidenciasView(QWidget):
         )
         self.cmb_tecnico.setCurrentIndex(idx if idx >= 0 else 0)
 
+    def _editar_descripcion(self) -> None:
+        if not self._current_id:
+            return
+        inc = self._ctx.incidencias.obtener(
+            self._current_id, es_demo=self._session.es_demo
+        )
+        if not inc:
+            return
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Editar descripción")
+        dlg.setMinimumWidth(420)
+        form = QFormLayout(dlg)
+        texto = QTextEdit()
+        texto.setPlainText(inc.descripcion or "")
+        texto.setMinimumHeight(140)
+        form.addRow(texto)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        form.addRow(buttons)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        try:
+            self._ctx.incidencias.actualizar_descripcion(
+                self._current_id,
+                texto.toPlainText(),
+                actor_id=self._session.usuario_id,
+                rol=self._session.rol,
+                es_demo=self._session.es_demo,
+            )
+            self._mostrar(self._current_id)
+            show_toast(self._status, "Descripción actualizada.")
+        except Exception as exc:
+            show_toast(self._status, str(exc), error=True)
+
+    def _adjuntar(self) -> None:
+        if not self._current_id:
+            return
+        ruta, _ = QFileDialog.getOpenFileName(
+            self,
+            "Adjuntar archivo",
+            "",
+            "Adjuntos (*.png *.jpg *.jpeg *.gif *.webp *.pdf *.txt *.log *.zip)",
+        )
+        if not ruta:
+            return
+        try:
+            from pathlib import Path
+
+            self._ctx.incidencias.agregar_adjunto(
+                self._current_id,
+                Path(ruta),
+                usuario_id=self._session.usuario_id,
+                rol=self._session.rol,
+                es_demo=self._session.es_demo,
+            )
+            self._mostrar(self._current_id)
+            show_toast(self._status, "Archivo adjuntado.")
+        except Exception as exc:
+            show_toast(self._status, str(exc), error=True)
+
+    def _adjunto_seleccionado_id(self) -> int | None:
+        item = self.lista_adjuntos.currentItem()
+        if not item:
+            return None
+        aid = item.data(Qt.ItemDataRole.UserRole)
+        return int(aid) if aid is not None else None
+
+    def _abrir_adjunto(self, *_args) -> None:
+        aid = self._adjunto_seleccionado_id()
+        if not aid:
+            show_toast(self._status, "Selecciona un adjunto.", error=True)
+            return
+        adj = self._ctx.incidencia_repo.obtener_adjunto(aid)
+        if not adj:
+            show_toast(self._status, "Adjunto no encontrado.", error=True)
+            return
+        ruta = self._ctx.incidencias.ruta_adjunto(adj)
+        if not ruta.is_file():
+            show_toast(self._status, "El archivo ya no está en disco.", error=True)
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(ruta.resolve())))
+
+    def _eliminar_adjunto(self) -> None:
+        aid = self._adjunto_seleccionado_id()
+        if not aid or not self._current_id:
+            show_toast(self._status, "Selecciona un adjunto.", error=True)
+            return
+        if QMessageBox.question(
+            self, "Quitar adjunto", "¿Eliminar este archivo del ticket?"
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            self._ctx.incidencias.eliminar_adjunto(
+                aid,
+                actor_id=self._session.usuario_id,
+                rol=self._session.rol,
+                es_demo=self._session.es_demo,
+            )
+            self._mostrar(self._current_id)
+            show_toast(self._status, "Adjunto eliminado.")
+        except Exception as exc:
+            show_toast(self._status, str(exc), error=True)
+
+    def nueva_incidencia(self) -> None:
+        """API pública para abrir el diálogo de alta desde el Dashboard."""
+        self._nueva()
+
+    def _confirmar_resolucion(self) -> None:
+        if not self._current_id:
+            return
+        if QMessageBox.question(
+            self,
+            "Confirmar resolución",
+            "¿Confirmas que el problema quedó resuelto? Se cerrará el ticket.",
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            self._ctx.incidencias.confirmar_resolucion(
+                self._current_id,
+                actor_id=self._session.usuario_id,
+                rol=self._session.rol,
+                es_demo=self._session.es_demo,
+            )
+            self.refresh()
+            self._mostrar(self._current_id)
+            show_toast(self._status, "Resolución confirmada. Ticket cerrado.")
+        except Exception as exc:
+            show_toast(self._status, str(exc), error=True)
+
+    def _reabrir(self) -> None:
+        if not self._current_id:
+            return
+        if QMessageBox.question(
+            self,
+            "Reabrir incidencia",
+            "¿Reabrir este ticket? Volverá a la cola de soporte.",
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            self._ctx.incidencias.reabrir(
+                self._current_id,
+                actor_id=self._session.usuario_id,
+                rol=self._session.rol,
+                es_demo=self._session.es_demo,
+            )
+            self.refresh()
+            self._mostrar(self._current_id)
+            show_toast(self._status, "Incidencia reabierta.")
+        except Exception as exc:
+            show_toast(self._status, str(exc), error=True)
+
     def _enviar_comentario(self) -> None:
         if not self._current_id:
             return
@@ -612,6 +920,13 @@ class IncidenciasView(QWidget):
 
     def _nueva(self) -> None:
         dlg = NuevaIncidenciaDialog(self._ctx, self._session, self)
+        if dlg.equipo.count() == 0:
+            show_toast(
+                self._status,
+                "Registra primero un equipo en la sección Equipos.",
+                error=True,
+            )
+            return
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
         data = dlg.datos()
@@ -624,6 +939,7 @@ class IncidenciasView(QWidget):
                 titulo=data["titulo"],
                 descripcion=data["descripcion"],
                 prioridad=data["prioridad"],
+                categoria=data["categoria"],
                 actor_id=self._session.usuario_id,
             )
             self.refresh()

@@ -22,9 +22,38 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
 LOGS_DIR = BASE_DIR / "logs"
 ASSETS_DIR = BASE_DIR / "assets"
+ADJUNTOS_DIR = DATA_DIR / "adjuntos"
 DB_PATH = DATA_DIR / "asist1d0.db"
 SCHEMA_PATH = Path(__file__).resolve().parent / "database" / "schema.sql"
 LOG_FILE = LOGS_DIR / "asist1d0.log"
+# Límites de adjuntos en incidencias.
+ADJUNTO_MAX_BYTES = 10 * 1024 * 1024
+ADJUNTO_EXTENSIONES = {
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".pdf",
+    ".txt",
+    ".log",
+    ".zip",
+}
+
+# SLA: días naturales desde la creación hasta el vencimiento (Crítica = 24 h).
+# Se importa Prioridad de forma diferida en enums para evitar ciclo.
+SLA_DIAS_POR_PRIORIDAD = {
+    "Baja": 7,
+    "Media": 3,
+    "Alta": 1,
+    "Crítica": 0,
+}
+
+SMTP_CONFIG_PATH = DATA_DIR / "smtp.json"
+API_HOST = "127.0.0.1"
+API_PORT = 8765
+JWT_SECRET = "asist1d0-dev-secret-change-in-production"
+JWT_HOURS = 12
 
 # Logo del programa: coloca el archivo en assets/ con uno de estos nombres.
 _LOGO_CANDIDATES = ("logo.png", "logo.svg", "logo.ico", "logo.jpg", "logo.jpeg")
@@ -45,3 +74,4 @@ LOGO_PATH = resolve_logo_path()
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 LOGS_DIR.mkdir(parents=True, exist_ok=True)
 ASSETS_DIR.mkdir(parents=True, exist_ok=True)
+ADJUNTOS_DIR.mkdir(parents=True, exist_ok=True)

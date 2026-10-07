@@ -5,7 +5,7 @@ Reexporta entidades y enums usados por repositorios, servicios y UI.
 """
 
 from app.models.componente import Componente, componente_desde_fila
-from app.models.enums import EstadoIncidencia, Prioridad, Rol
+from app.models.enums import CategoriaIncidencia, EstadoIncidencia, Prioridad, Rol
 from app.models.equipo import Equipo, equipo_desde_fila
 from app.models.incidencia import (
     HistorialEntrada,
@@ -19,6 +19,7 @@ from app.models.usuario import Administrador, Tecnico, Usuario, usuario_desde_fi
 
 __all__ = [
     "Administrador",
+    "CategoriaIncidencia",
     "Componente",
     "Equipo",
     "EstadoIncidencia",

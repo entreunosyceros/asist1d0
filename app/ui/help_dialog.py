@@ -31,13 +31,16 @@ def _ayuda_usuario() -> str:
 <ul>
   <li>Consulta el resumen de tus incidencias pendientes, abiertas y de alta prioridad.</li>
   <li>Haz clic en una incidencia reciente para abrirla.</li>
+  <li>Si no tienes equipo o tickets, verás botones para registrar equipo o abrir tu primera incidencia.</li>
 </ul>
 <h3>Incidencias</h3>
 <ul>
-  <li>Crea nuevas incidencias asociadas a tus equipos.</li>
-  <li>Filtra por estado o prioridad y busca por texto.</li>
-  <li>Consulta el detalle, intervenciones e historial (sin modificar estado ni asignaciones).</li>
-  <li><b>Comentarios</b>: escribe en el hilo del ticket para aportar información al soporte.</li>
+  <li>Crea incidencias eligiendo una <b>categoría</b> (plantilla de título/descripción editable).</li>
+  <li>Filtra por estado, prioridad o categoría y busca por texto.</li>
+  <li>Ficha de <b>seguimiento</b>: estado claro, SLA (plazo) y badge <b>Vencida</b> si se supera.</li>
+  <li><b>Confirmar resolución</b> cuando el ticket está Pendiente o En reparación; <b>Reabrir</b> si estaba Cerrada.</li>
+  <li><b>Adjuntos</b>, editar descripción y <b>comentarios</b> en tus tickets.</li>
+  <li>También puedes usar el <b>portal web</b> (misma cuenta): menú <b>Ayuda → Abrir portal web…</b> o desde la bandeja.</li>
 </ul>
 <h3>Sesión y bandeja</h3>
 <ul>
@@ -46,8 +49,8 @@ def _ayuda_usuario() -> str:
 </ul>
 <h3>Equipos</h3>
 <ul>
-  <li>Registra tus equipos (marca, modelo, nº de serie, sistema operativo).</li>
-  <li>Revisa el árbol de incidencias de cada equipo.</li>
+  <li>Registra y <b>edita</b> tus equipos (marca, modelo, nº de serie, sistema operativo).</li>
+  <li>Doble clic en un ticket del árbol para abrirlo en Incidencias.</li>
 </ul>
 <p><i>No tienes acceso a Usuarios, Inventario, Informes ni Panel técnico.</i></p>
 """
@@ -66,7 +69,9 @@ def _ayuda_tecnico() -> str:
 </ul>
 <h3>Incidencias</h3>
 <ul>
-  <li>Busca y filtra (estado, prioridad, «Mis asignadas», «Sin asignar», por técnico).</li>
+  <li>Busca y filtra (estado, prioridad, categoría, «Mis asignadas», «Sin asignar», por técnico).</li>
+  <li>Los tickets <b>Vencidos</b> (SLA) se resaltan en el listado.</li>
+  <li>Pon el ticket en <b>Pendiente</b> para pedir confirmación al usuario.</li>
   <li>Cambia estado y prioridad; asigna o desasigna técnicos.</li>
   <li><b>Comentarios</b> en el hilo del ticket (usuario y técnico).</li>
   <li>Añade intervenciones y usa repuestos del inventario.</li>
@@ -79,7 +84,7 @@ def _ayuda_tecnico() -> str:
 </ul>
 <h3>Equipos</h3>
 <ul>
-  <li>Alta, edición y baja de equipos del ámbito.</li>
+  <li>Alta, edición y baja de equipos del ámbito; doble clic en un ticket del árbol para abrirlo.</li>
 </ul>
 <h3>Usuarios</h3>
 <ul>
@@ -145,7 +150,7 @@ def texto_ayuda_para(session: SessionContext) -> str:
     <ul>
       <li><b>Sesión</b>: cambiar contraseña (admin) y cerrar la sesión actual.</li>
       <li><b>Ir</b>: navega a las secciones disponibles para tu rol.</li>
-      <li><b>Ayuda</b>: esta guía y la ventana Acerca de.</li>
+      <li><b>Ayuda</b>: esta guía, <b>Abrir portal web…</b> y la ventana Acerca de.</li>
     </ul>
     """
     return intro + cuerpo + comun

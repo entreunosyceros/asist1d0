@@ -59,3 +59,30 @@ def migrate_schema(db: DatabaseConnection) -> None:
     db.execute(
         "CREATE INDEX IF NOT EXISTS idx_comentarios_incidencia ON comentarios(incidencia_id)"
     )
+
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS adjuntos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            incidencia_id INTEGER NOT NULL,
+            usuario_id INTEGER NOT NULL,
+            nombre_original TEXT NOT NULL,
+            nombre_archivo TEXT NOT NULL,
+            tamano INTEGER NOT NULL DEFAULT 0 CHECK (tamano >= 0),
+            fecha TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+            FOREIGN KEY (incidencia_id) REFERENCES incidencias(id) ON DELETE CASCADE,
+            FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE
+        )
+        """
+    )
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_adjuntos_incidencia ON adjuntos(incidencia_id)"
+    )
+
+    if "categoria" not in _columnas(db, "incidencias"):
+        db.execute(
+            "ALTER TABLE incidencias ADD COLUMN categoria TEXT NOT NULL DEFAULT 'Otro'"
+        )
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_incidencias_categoria ON incidencias(categoria)"
+    )

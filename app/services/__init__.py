@@ -9,11 +9,14 @@ directamente con la base de datos.
 from __future__ import annotations
 
 import csv
+import shutil
+import uuid
 from collections.abc import Callable
 from pathlib import Path
 from typing import Optional
 
 from app.auth.password import hash_password
+from app.config import ADJUNTO_EXTENSIONES, ADJUNTO_MAX_BYTES, ADJUNTOS_DIR
 from app.database.connection import DatabaseConnection
 from app.database.repositories import (
     ComponenteRepository,
@@ -22,9 +25,9 @@ from app.database.repositories import (
     UsuarioRepository,
 )
 from app.models.componente import Componente
-from app.models.enums import EstadoIncidencia, Prioridad, Rol
+from app.models.enums import CategoriaIncidencia, EstadoIncidencia, Prioridad, Rol
 from app.models.equipo import Equipo
-from app.models.incidencia import Comentario, Incidencia, Intervencion
+from app.models.incidencia import Adjunto, Comentario, Incidencia, Intervencion
 from app.models.usuario import Usuario
 from app.services.notificador import Notificador, NotificadorCompuesto, NotificadorConsola, NotificadorEmail
 
@@ -165,7 +168,17 @@ class EquipoService:
         eq.id = self._repo.crear(eq)
         return eq
 
-    def actualizar(self, equipo: Equipo) -> Equipo:
+    def actualizar(
+        self,
+        equipo: Equipo,
+        *,
+        actor_id: Optional[int] = None,
+        rol: Optional[Rol] = None,
+    ) -> Equipo:
+        """Actualiza un equipo; el rol Usuario solo puede editar los suyos."""
+        if rol == Rol.USUARIO:
+            if actor_id is None or equipo.usuario_id != actor_id:
+                raise PermissionError("Solo puedes editar tus propios equipos")
         self._repo.actualizar(equipo)
         return equipo
 
@@ -243,28 +256,25 @@ class IncidenciaService:
         titulo: str,
         descripcion: str = "",
         prioridad: Prioridad = Prioridad.MEDIA,
+        categoria: CategoriaIncidencia = CategoriaIncidencia.OTRO,
         actor_id: Optional[int] = None,
         tecnico_id: Optional[int] = None,
     ) -> Incidencia:
-        inc = Incidencia(
-            _equipo_id=equipo_id,
-            _titulo=titulo,
-            _descripcion=descripcion,
-            _prioridad=prioridad,
-            _tecnico_id=tecnico_id,
-        )
+        if isinstance(categoria, str):
+            categoria = CategoriaIncidencia(categoria)
         with self._repo._db.transaction() as conn:
             cur = conn.execute(
                 """
                 INSERT INTO incidencias
-                    (equipo_id, tecnico_id, titulo, descripcion, estado, prioridad)
-                VALUES (?, ?, ?, ?, ?, ?)
+                    (equipo_id, tecnico_id, titulo, descripcion, categoria, estado, prioridad)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     equipo_id,
                     tecnico_id,
                     titulo,
                     descripcion,
+                    categoria.value,
                     EstadoIncidencia.ABIERTA.value,
                     prioridad.value,
                 ),
@@ -272,12 +282,70 @@ class IncidenciaService:
             inc_id = cur.lastrowid
             conn.execute(
                 "INSERT INTO historial (incidencia_id, accion, usuario_id) VALUES (?, ?, ?)",
-                (inc_id, f"Incidencia creada: {titulo}", actor_id),
+                (inc_id, f"Incidencia creada: {titulo} [{categoria.value}]", actor_id),
             )
         inc = self._repo.obtener_por_id(inc_id)  # type: ignore[arg-type]
         assert inc is not None
         self._notificador.notificar(inc, f"Nueva incidencia creada con prioridad {prioridad.value}")
         return inc
+
+    def confirmar_resolucion(
+        self,
+        incidencia_id: int,
+        *,
+        actor_id: int,
+        rol: Rol,
+        es_demo: Optional[bool] = None,
+    ) -> Incidencia:
+        """El usuario dueño confirma que el problema quedó resuelto → Cerrada."""
+        if rol != Rol.USUARIO:
+            raise PermissionError("Solo el usuario final confirma la resolución")
+        inc = self._repo.obtener_por_id(
+            incidencia_id, con_detalle=False, es_demo=es_demo
+        )
+        if not inc:
+            raise ValueError("Incidencia no encontrada")
+        if inc.usuario_id != actor_id:
+            raise PermissionError("Solo puedes confirmar tus propias incidencias")
+        if inc.estado not in (
+            EstadoIncidencia.PENDIENTE,
+            EstadoIncidencia.EN_REPARACION,
+        ):
+            raise ValueError(
+                "Solo puedes confirmar cuando el ticket está En reparación o Pendiente"
+            )
+        return self.cambiar_estado(
+            incidencia_id, EstadoIncidencia.CERRADA, actor_id=actor_id
+        )
+
+    def reabrir(
+        self,
+        incidencia_id: int,
+        *,
+        actor_id: int,
+        rol: Rol,
+        es_demo: Optional[bool] = None,
+    ) -> Incidencia:
+        """El usuario dueño reabre un ticket cerrado."""
+        if rol != Rol.USUARIO:
+            raise PermissionError("Solo el usuario final puede reabrir desde el portal/ficha")
+        inc = self._repo.obtener_por_id(
+            incidencia_id, con_detalle=False, es_demo=es_demo
+        )
+        if not inc:
+            raise ValueError("Incidencia no encontrada")
+        if inc.usuario_id != actor_id:
+            raise PermissionError("Solo puedes reabrir tus propias incidencias")
+        if inc.estado != EstadoIncidencia.CERRADA:
+            raise ValueError("Solo se pueden reabrir incidencias cerradas")
+        resultado = self.cambiar_estado(
+            incidencia_id, EstadoIncidencia.ABIERTA, actor_id=actor_id
+        )
+        self._repo.agregar_historial(
+            incidencia_id, "Reabierta por el usuario", actor_id
+        )
+        self._notificador.notificar(resultado, "Incidencia reabierta por el usuario")
+        return resultado
 
     def cambiar_estado(
         self,
@@ -441,6 +509,121 @@ class IncidenciaService:
         )
         rows = self._repo.listar_comentarios(incidencia_id)
         return rows[-1] if rows else comentario
+
+    def actualizar_descripcion(
+        self,
+        incidencia_id: int,
+        descripcion: str,
+        *,
+        actor_id: int,
+        rol: Rol,
+        es_demo: Optional[bool] = None,
+    ) -> Incidencia:
+        """Permite ampliar/corregir la descripción de un ticket no cerrado."""
+        inc = self._repo.obtener_por_id(
+            incidencia_id, con_detalle=False, es_demo=es_demo
+        )
+        if not inc:
+            raise ValueError("Incidencia no encontrada")
+        if rol == Rol.USUARIO:
+            if inc.usuario_id != actor_id:
+                raise PermissionError("Solo puedes editar tus propias incidencias")
+            if inc.estado == EstadoIncidencia.CERRADA:
+                raise PermissionError(
+                    "No puedes editar la descripción de un ticket cerrado"
+                )
+        texto = (descripcion or "").strip()
+        inc.descripcion = texto
+        self._repo.actualizar(inc)
+        self._repo.agregar_historial(
+            incidencia_id, "Descripción actualizada", actor_id
+        )
+        return self._repo.obtener_por_id(incidencia_id)  # type: ignore[return-value]
+
+    def agregar_adjunto(
+        self,
+        incidencia_id: int,
+        origen: Path,
+        *,
+        usuario_id: int,
+        rol: Rol,
+        es_demo: Optional[bool] = None,
+    ) -> Adjunto:
+        """Copia un fichero a data/adjuntos/{incidencia_id}/ y registra metadatos."""
+        origen = Path(origen)
+        if not origen.is_file():
+            raise ValueError("El archivo no existe")
+        ext = origen.suffix.lower()
+        if ext not in ADJUNTO_EXTENSIONES:
+            permitidas = ", ".join(sorted(ADJUNTO_EXTENSIONES))
+            raise ValueError(f"Tipo no permitido. Usa: {permitidas}")
+        tamano = origen.stat().st_size
+        if tamano > ADJUNTO_MAX_BYTES:
+            raise ValueError("El archivo supera el límite de 10 MB")
+        inc = self._repo.obtener_por_id(
+            incidencia_id, con_detalle=False, es_demo=es_demo
+        )
+        if not inc:
+            raise ValueError("Incidencia no encontrada")
+        if rol == Rol.USUARIO and inc.usuario_id != usuario_id:
+            raise PermissionError("Solo puedes adjuntar en tus propias incidencias")
+
+        carpeta = ADJUNTOS_DIR / str(incidencia_id)
+        carpeta.mkdir(parents=True, exist_ok=True)
+        seguro = "".join(
+            ch if ch.isalnum() or ch in "._- " else "_" for ch in origen.name
+        ).strip() or "archivo"
+        nombre_archivo = f"{uuid.uuid4().hex[:12]}_{seguro}"
+        destino = carpeta / nombre_archivo
+        shutil.copy2(origen, destino)
+
+        adjunto = Adjunto(
+            _incidencia_id=incidencia_id,
+            _usuario_id=usuario_id,
+            _nombre_original=origen.name,
+            _nombre_archivo=nombre_archivo,
+            _tamano=tamano,
+        )
+        adjunto.id = self._repo.crear_adjunto(adjunto)
+        self._repo.agregar_historial(
+            incidencia_id,
+            f"Adjunto añadido: {origen.name}",
+            usuario_id,
+        )
+        return adjunto
+
+    def ruta_adjunto(self, adjunto: Adjunto) -> Path:
+        return ADJUNTOS_DIR / str(adjunto.incidencia_id) / adjunto.nombre_archivo
+
+    def eliminar_adjunto(
+        self,
+        adjunto_id: int,
+        *,
+        actor_id: int,
+        rol: Rol,
+        es_demo: Optional[bool] = None,
+    ) -> None:
+        adj = self._repo.obtener_adjunto(adjunto_id)
+        if not adj:
+            raise ValueError("Adjunto no encontrado")
+        inc = self._repo.obtener_por_id(
+            adj.incidencia_id, con_detalle=False, es_demo=es_demo
+        )
+        if not inc:
+            raise ValueError("Incidencia no encontrada")
+        if rol == Rol.USUARIO and (
+            inc.usuario_id != actor_id or adj.usuario_id != actor_id
+        ):
+            raise PermissionError("Solo puedes eliminar tus propios adjuntos")
+        ruta = self.ruta_adjunto(adj)
+        self._repo.eliminar_adjunto(adjunto_id)
+        if ruta.is_file():
+            ruta.unlink()
+        self._repo.agregar_historial(
+            adj.incidencia_id,
+            f"Adjunto eliminado: {adj.nombre_original}",
+            actor_id,
+        )
 
     def agregar_intervencion(
         self,

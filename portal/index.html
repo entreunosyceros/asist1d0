@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Asist{1d0} · Portal</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="top">
+    <div class="brand">Asist{1d0}</div>
+    <nav id="nav" class="hidden">
+      <button type="button" data-view="incidencias">Incidencias</button>
+      <button type="button" data-view="nueva">Nueva</button>
+      <button type="button" data-view="equipos">Equipos</button>
+      <button type="button" id="btn-logout" class="ghost">Salir</button>
+    </nav>
+  </header>
+
+  <main>
+    <section id="view-login" class="card">
+      <h1>Acceso al portal</h1>
+      <p class="muted">Misma cuenta que la aplicación de escritorio.</p>
+      <label>Email <input id="login-email" type="email" value="juan@asist1d0.local" autocomplete="username" /></label>
+      <label>Contraseña <input id="login-pass" type="password" value="juan123" autocomplete="current-password" /></label>
+      <button type="button" id="btn-login" class="primary">Entrar</button>
+      <p id="login-error" class="error"></p>
+    </section>
+
+    <section id="view-incidencias" class="hidden">
+      <h1>Mis incidencias</h1>
+      <div id="lista-incidencias" class="list"></div>
+    </section>
+
+    <section id="view-detalle" class="hidden">
+      <button type="button" class="ghost" id="btn-volver">← Volver</button>
+      <article id="detalle" class="card"></article>
+      <div class="card">
+        <h2>Comentarios</h2>
+        <div id="detalle-comentarios" class="list"></div>
+        <label>Nuevo comentario
+          <textarea id="comentario-texto" rows="3"></textarea>
+        </label>
+        <button type="button" id="btn-comentar" class="primary">Enviar</button>
+        <div id="detalle-acciones" class="actions"></div>
+      </div>
+    </section>
+
+    <section id="view-nueva" class="hidden card">
+      <h1>Nueva incidencia</h1>
+      <label>Equipo <select id="nueva-equipo"></select></label>
+      <label>Categoría <select id="nueva-categoria"></select></label>
+      <label>Título <input id="nueva-titulo" type="text" /></label>
+      <label>Descripción <textarea id="nueva-desc" rows="4"></textarea></label>
+      <label>Prioridad
+        <select id="nueva-prio">
+          <option>Baja</option>
+          <option selected>Media</option>
+          <option>Alta</option>
+          <option>Crítica</option>
+        </select>
+      </label>
+      <button type="button" id="btn-crear" class="primary">Crear</button>
+      <p id="nueva-error" class="error"></p>
+    </section>
+
+    <section id="view-equipos" class="hidden">
+      <h1>Mis equipos</h1>
+      <div id="lista-equipos" class="list"></div>
+      <div class="card">
+        <h2>Registrar equipo</h2>
+        <label>Nº serie <input id="eq-serie" type="text" /></label>
+        <label>Marca <input id="eq-marca" type="text" /></label>
+        <label>Modelo <input id="eq-modelo" type="text" /></label>
+        <label>SO <input id="eq-so" type="text" /></label>
+        <button type="button" id="btn-eq" class="primary">Guardar equipo</button>
+        <p id="eq-error" class="error"></p>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
