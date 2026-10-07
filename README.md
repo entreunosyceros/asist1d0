@@ -73,6 +73,9 @@ Se usa en:
 Si no hay logo, la app funciona igual con el texto del nombre.
 
 ## Acceso (login)
+<p align="center">
+<img width="378" height="490" alt="login" src="https://github.com/user-attachments/assets/63e8c300-5cc7-441f-9bb7-4071ae81884b" />
+</p>
 
 - Ventana **sin bordes** del sistema: solo se ve la tarjeta del formulario
 - Puedes **arrastrar** la ventana y cerrarla con ✕ o Escape (sale de la aplicación)
@@ -91,6 +94,10 @@ Las cuentas demo están en un ámbito aislado: **no pueden ver equipos, incidenc
 
 ## Roles
 
+<p align="center">
+![Uploading about-asist1d0.png…]()
+</p>
+
 | Rol | Capacidades principales |
 |-----|-------------------------|
 | **Usuario** | Sus equipos (alta/edición), incidencias (crear, comentar, adjuntos, editar descripción), dashboard |
@@ -100,6 +107,10 @@ Las cuentas demo están en un ámbito aislado: **no pueden ver equipos, incidenc
 Todos los roles pueden **cambiar su propia contraseña** (menú Sesión o bandeja).
 
 ## Interfaz principal
+
+<p align="center">
+<img width="1920" height="1011" alt="asistido-admin" src="https://github.com/user-attachments/assets/d86cf079-ad73-4239-ab39-887eec90297e" />
+</p>
 
 ### Menú superior
 
@@ -150,6 +161,10 @@ Asist1d0/
 
 ## API REST y portal web
 
+<p align="center">
+<img width="1913" height="922" alt="portalweb" src="https://github.com/user-attachments/assets/074df649-0733-4074-ad97-fb0f4c504941" />
+</p>
+
 Misma base SQLite que el escritorio.
 
 **Desde el escritorio:** menú **Ir → Abrir portal web…** (también en la bandeja). Si la API no está en marcha, la arranca sola y abre el navegador.
@@ -168,6 +183,10 @@ Endpoints útiles bajo `/api/` (Bearer JWT tras `POST /api/auth/login`): inciden
 
 ### Auditoría vs historial del ticket
 
+<p align="center">
+<img width="1917" height="1011" alt="auditoria" src="https://github.com/user-attachments/assets/ae0ce8d7-cc1a-4a08-a7e0-34c4ca96a12f" />
+</p>
+
 - **Historial / timeline** (en la ficha de la incidencia): actividad unificada del caso (estados, comentarios, intervenciones, repuestos).
 - **Auditoría** (sección Escritorio + `GET /api/audit`): registro transversal de acciones sobre usuarios, equipos, inventario e incidencias, filtrable por actor/acción/fecha/entidad.
 
@@ -185,13 +204,24 @@ Cada categoría del catálogo define su propio SLA en horas (p. ej. Impresora 48
 
 ### Grupos de técnicos
 
+<p align="center">
+<img width="1917" height="1047" alt="usuarios" src="https://github.com/user-attachments/assets/19bfa398-36f2-4ef6-8b51-4353c8349d3a" />
+</p>
+
 Colas reales en BBDD: **Soporte Hardware**, **Soporte Software**, **Redes**, **Sistemas**. Un técnico/admin puede pertenecer a varios. Al crear una incidencia se encola en el grupo de su categoría; luego se puede asignar a un técnico de ese grupo.
 
 ### Base de conocimiento
+<p align="center">
+<img width="1919" height="1009" alt="base-conocimiento" src="https://github.com/user-attachments/assets/d4cf2df4-87b7-4825-8263-84acf71329ff" />
+</p>
 
 Artículos de autoayuda ligados a categorías del catálogo. Al crear una incidencia aparecen **posibles soluciones** (doble clic para leer). Todos los roles pueden consultar; técnico y admin pueden crear/editar.
 
 ### Inventario de equipos (relaciones SQLite)
+
+<p align="center">
+<img width="1922" height="1010" alt="inventario" src="https://github.com/user-attachments/assets/82fd183f-d839-4c4e-b4a1-f3dc1eb54e4a" />
+</p>
 
 Cada equipo (`PC-023`) tiene especificaciones (CPU, RAM, almacenamiento, GPU, SO) y tablas hijas:
 
