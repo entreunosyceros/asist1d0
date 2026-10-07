@@ -148,10 +148,6 @@ Asist1d0/
     └── ui/                 # PySide6 (vistas, diálogos, estilos, bandeja)
 ```
 
-## Repositorio
-
-Código y proyecto: [github.com/entreunosyceros/asist1d0](https://github.com/entreunosyceros/asist1d0)
-
 ## Fase 2 (no incluida)
 
 API REST con FastAPI, email SMTP real y empaquetado instalable.
