@@ -119,25 +119,70 @@ class UsarRepuestoDialog(QDialog):
 
     def __init__(self, ctx: AppContext, session: SessionContext, parent=None) -> None:
         super().__init__(parent)
+        self._ctx = ctx
+        self._session = session
         self.setWindowTitle("Usar repuesto")
-        self.setMinimumWidth(400)
+        self.setMinimumWidth(420)
         layout = QFormLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
         self.componente = QComboBox()
-        for c in ctx.inventario.listar(es_demo=session.es_demo):
-            if c.stock > 0:
-                self.componente.addItem(f"{c.nombre} (stock {c.stock})", c.id)
+        self._rellenar_componentes()
         self.cantidad = QSpinBox()
         self.cantidad.setRange(1, 999)
         self.cantidad.setValue(1)
         layout.addRow("Componente", self.componente)
         layout.addRow("Cantidad", self.cantidad)
+        if session.puede_gestionar_inventario():
+            btn_nuevo = QPushButton("+ Añadir pieza al inventario…")
+            btn_nuevo.setObjectName("SecondaryButton")
+            btn_nuevo.clicked.connect(self._nuevo_repuesto)
+            layout.addRow(btn_nuevo)
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addRow(buttons)
+
+    def _rellenar_componentes(self, seleccionar_id: int | None = None) -> None:
+        self.componente.clear()
+        for c in self._ctx.inventario.listar(es_demo=self._session.es_demo):
+            if c.stock > 0:
+                self.componente.addItem(f"{c.nombre} (stock {c.stock})", c.id)
+        if seleccionar_id is not None:
+            idx = self.componente.findData(seleccionar_id)
+            if idx >= 0:
+                self.componente.setCurrentIndex(idx)
+
+    def _nuevo_repuesto(self) -> None:
+        from app.ui.inventario import ComponenteDialog
+
+        dlg = ComponenteDialog(parent=self)
+        dlg.stock.setValue(1)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        nombre = dlg.nombre.text().strip()
+        if not nombre:
+            QMessageBox.warning(self, "Repuesto", "Indica el nombre de la pieza.")
+            return
+        try:
+            creado = self._ctx.inventario.crear(
+                nombre=nombre,
+                stock=dlg.stock.value(),
+                precio=dlg.precio.value(),
+                descripcion=dlg.descripcion.toPlainText().strip(),
+                es_demo=self._session.es_demo,
+            )
+            self._rellenar_componentes(creado.id)
+            if self.componente.count() == 0:
+                QMessageBox.information(
+                    self,
+                    "Repuesto",
+                    f"«{creado.nombre}» se creó, pero el stock es 0. "
+                    "Añade stock en Inventario para poder usarlo.",
+                )
+        except Exception as exc:
+            QMessageBox.warning(self, "Repuesto", str(exc))
 
     def datos(self):
         return {
@@ -669,13 +714,18 @@ class IncidenciasView(QWidget):
         if not self._current_id or not self._session.es_tecnico():
             return
         dlg = UsarRepuestoDialog(self._ctx, self._session, self)
-        if dlg.componente.count() == 0:
+        if dlg.componente.count() == 0 and not self._session.puede_gestionar_inventario():
             show_toast(self._status, "No hay componentes con stock.", error=True)
             return
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
         data = dlg.datos()
         if not data["componente_id"]:
+            show_toast(
+                self._status,
+                "Selecciona una pieza o añádela al inventario primero.",
+                error=True,
+            )
             return
         prev = self.btn_repuesto.text()
         self.btn_repuesto.setEnabled(False)

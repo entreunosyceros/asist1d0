@@ -83,18 +83,21 @@ class InventarioView(QWidget):
         actions = []
         can_edit = self._session.puede_gestionar_inventario()
         if can_edit:
-            btn_new = QPushButton("+ Nuevo")
+            btn_new = QPushButton("+ Nuevo repuesto")
             btn_new.clicked.connect(self._nuevo)
             btn_edit = QPushButton("Editar")
             btn_edit.setObjectName("SecondaryButton")
             btn_edit.clicked.connect(self._editar)
+            btn_stock = QPushButton("+ Stock")
+            btn_stock.setObjectName("SecondaryButton")
+            btn_stock.clicked.connect(self._sumar_stock)
             btn_del = QPushButton("Eliminar")
             btn_del.setObjectName("DangerButton")
             btn_del.clicked.connect(self._eliminar)
-            actions.extend([btn_new, btn_edit, btn_del])
+            actions.extend([btn_new, btn_edit, btn_stock, btn_del])
         header, self._status = build_page_header(
             "Inventario",
-            "Componentes y repuestos del ámbito actual",
+            "Alta y stock de piezas/repuestos disponibles para las reparaciones",
             actions=actions or None,
         )
         layout.addLayout(header)
@@ -107,8 +110,8 @@ class InventarioView(QWidget):
         self.tabla.horizontalHeader().setStretchLastSection(True)
         layout.addWidget(self.tabla)
         self.empty = EmptyState(
-            "No hay componentes en el inventario.",
-            "+ Nuevo" if can_edit else "",
+            "No hay piezas de repuesto en el inventario.",
+            "+ Nuevo repuesto" if can_edit else "",
             self._nuevo if can_edit else None,
         )
         layout.addWidget(self.empty)
@@ -142,43 +145,98 @@ class InventarioView(QWidget):
         return None
 
     def _nuevo(self) -> None:
+        if not self._session.puede_gestionar_inventario():
+            show_toast(self._status, "No tienes permiso para gestionar el inventario.", error=True)
+            return
         dlg = ComponenteDialog(parent=self)
+        dlg.stock.setValue(1)
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
+        nombre = dlg.nombre.text().strip()
+        if not nombre:
+            show_toast(self._status, "Indica el nombre de la pieza.", error=True)
+            return
         try:
-            self._ctx.inventario.crear(
-                nombre=dlg.nombre.text().strip(),
+            creado = self._ctx.inventario.crear(
+                nombre=nombre,
                 stock=dlg.stock.value(),
                 precio=dlg.precio.value(),
                 descripcion=dlg.descripcion.toPlainText().strip(),
                 es_demo=self._session.es_demo,
             )
             self.refresh()
-            show_toast(self._status, "Componente creado.")
+            show_toast(
+                self._status,
+                f"Repuesto «{creado.nombre}» añadido (stock {creado.stock}).",
+            )
         except Exception as exc:
             show_toast(self._status, str(exc), error=True)
 
     def _editar(self) -> None:
+        if not self._session.puede_gestionar_inventario():
+            return
         c = self._seleccionado()
         if not c:
+            show_toast(self._status, "Selecciona una pieza de la lista.", error=True)
             return
         dlg = ComponenteDialog(componente=c, parent=self)
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
-        c.nombre = dlg.nombre.text().strip()
+        nombre = dlg.nombre.text().strip()
+        if not nombre:
+            show_toast(self._status, "Indica el nombre de la pieza.", error=True)
+            return
+        c.nombre = nombre
         c.stock = dlg.stock.value()
         c.precio = dlg.precio.value()
         c.descripcion = dlg.descripcion.toPlainText().strip()
         try:
             self._ctx.inventario.actualizar(c)
             self.refresh()
-            show_toast(self._status, "Componente actualizado.")
+            show_toast(self._status, f"Repuesto «{c.nombre}» actualizado.")
+        except Exception as exc:
+            show_toast(self._status, str(exc), error=True)
+
+    def _sumar_stock(self) -> None:
+        """Incrementa el stock de la pieza seleccionada (entrada rápida)."""
+        if not self._session.puede_gestionar_inventario():
+            return
+        c = self._seleccionado()
+        if not c:
+            show_toast(self._status, "Selecciona una pieza de la lista.", error=True)
+            return
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"Añadir stock — {c.nombre}")
+        form = QFormLayout(dlg)
+        cantidad = QSpinBox()
+        cantidad.setRange(1, 100000)
+        cantidad.setValue(1)
+        form.addRow("Cantidad a añadir", cantidad)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        form.addRow(buttons)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        c.stock = c.stock + cantidad.value()
+        try:
+            self._ctx.inventario.actualizar(c)
+            self.refresh()
+            show_toast(
+                self._status,
+                f"+{cantidad.value()} de «{c.nombre}». Stock actual: {c.stock}.",
+            )
         except Exception as exc:
             show_toast(self._status, str(exc), error=True)
 
     def _eliminar(self) -> None:
+        if not self._session.puede_gestionar_inventario():
+            return
         c = self._seleccionado()
         if not c:
+            show_toast(self._status, "Selecciona una pieza de la lista.", error=True)
             return
         if QMessageBox.question(
             self, "Eliminar", f"¿Eliminar {c.nombre}?"
@@ -187,6 +245,6 @@ class InventarioView(QWidget):
         try:
             self._ctx.inventario.eliminar(c.id)  # type: ignore[arg-type]
             self.refresh()
-            show_toast(self._status, "Componente eliminado.")
+            show_toast(self._status, f"Repuesto «{c.nombre}» eliminado.")
         except Exception as exc:
             show_toast(self._status, str(exc), error=True)

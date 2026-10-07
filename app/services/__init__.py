@@ -529,6 +529,11 @@ class InventarioService:
         descripcion: str = "",
         es_demo: bool = False,
     ) -> Componente:
+        nombre = (nombre or "").strip()
+        if not nombre:
+            raise ValueError("El nombre del repuesto es obligatorio")
+        if stock < 0:
+            raise ValueError("El stock no puede ser negativo")
         c = Componente(
             _nombre=nombre,
             _stock=stock,

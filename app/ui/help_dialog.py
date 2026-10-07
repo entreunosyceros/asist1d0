@@ -87,7 +87,8 @@ def _ayuda_tecnico() -> str:
 </ul>
 <h3>Inventario</h3>
 <ul>
-  <li>Gestiona stock de componentes/repuestos.</li>
+  <li>Añade piezas con «+ Nuevo repuesto», edítalas o suma stock con «+ Stock».</li>
+  <li>Las piezas con stock &gt; 0 aparecen al usar un repuesto en una incidencia.</li>
 </ul>
 <h3>Informes</h3>
 <ul>
@@ -108,6 +109,8 @@ def _ayuda_admin() -> str:
 <h3>Todo lo del técnico, y además:</h3>
 <ul>
   <li><b>Usuarios</b>: crear, editar y eliminar cuentas con roles Usuario, Técnico o Administrador.</li>
+  <li><b>Inventario</b>: + Nuevo repuesto, editar, + Stock o eliminar piezas disponibles para las reparaciones.</li>
+  <li>Desde una incidencia → «Usar repuesto» también puedes <b>añadir una pieza nueva</b> al inventario.</li>
   <li><b>Cambiar mi contraseña</b>: desde Sesión, la bandeja o Usuarios → «Mi contraseña» (cualquier rol; pide la actual y la nueva).</li>
   <li>Las cuentas <b>demo</b> no ven los datos de usuarios <b>reales</b> (y viceversa).</li>
   <li>Si entras con admin demo, puedes crear usuarios reales; sus incidencias/equipos no serán visibles para demos.</li>
