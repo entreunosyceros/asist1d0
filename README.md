@@ -1,5 +1,9 @@
 # Asist{1d0}
 
+<p align="center">
+<img width="786" height="852" alt="logo" src="https://github.com/user-attachments/assets/8b89866c-f93d-4013-976f-f81b4c7586b4" />
+</p>
+
 Sistema de gestión de incidencias y equipos (mini Help Desk) en Python.
 
 Practica **POO** (encapsulación, herencia, polimorfismo, composición), **SQLite** y una interfaz de escritorio con **PySide6**.
